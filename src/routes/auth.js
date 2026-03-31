@@ -98,6 +98,8 @@ router.get('/me', async (req, res) => {
 })
 
 router.post('/register', async (req, res) => {
+  console.log('REGISTER HIT:', req.body)
+
   const email =
     req.body.email != null ? String(req.body.email).trim().toLowerCase() : ''
   const password = req.body.password != null ? String(req.body.password) : ''
@@ -170,7 +172,7 @@ router.post('/register', async (req, res) => {
     if (err.code === '23505') {
       return res.status(409).json({ success: false, error: 'Email already registered' })
     }
-    console.error('POST /register error:', err)
+    console.error('REGISTER ERROR:', err)
     return res.status(500).json({ success: false, error: 'Internal server error' })
   } finally {
     client.release()
