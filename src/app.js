@@ -27,12 +27,14 @@ app.post(
   handleStripeWebhook,
 )
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*')
-  res.header('Access-Control-Allow-Headers', '*')
-  res.header('Access-Control-Allow-Methods', '*')
-  next()
-})
+app.use(
+  cors({
+    origin: ['https://quickbill-web.vercel.app', 'http://localhost:5173'],
+    credentials: true,
+  }),
+)
+
+app.options('*', cors())
 
 // ❗ แล้วค่อยมี
 app.use(express.json())
@@ -45,6 +47,10 @@ app.get('/health', (req, res) => {
 
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'API OK' })
+})
+
+app.get('/api/test', (req, res) => {
+  res.json({ ok: true })
 })
 
 /**
@@ -74,8 +80,8 @@ app.use('/api/suppliers', suppliersRoutes)
 app.use((err, req, res, next) => {
   console.error('GLOBAL ERROR:', err)
   res.status(500).json({
-    message: 'Internal Server Error',
-    error: err?.message,
+    success: false,
+    error: err?.message || 'Internal Server Error',
   })
 })
 
