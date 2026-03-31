@@ -203,6 +203,8 @@ router.get('/:id', async (req, res) => {
 })
 
 router.post('/', async (req, res) => {
+  console.log('CREATE INVOICE:', req.body)
+
   const client = await pool.connect()
   try {
     const accountId = requireAccountId(req)
@@ -219,19 +221,20 @@ router.post('/', async (req, res) => {
       doc_date,
       note,
       items: rawItems,
+      total,
     } = req.body
 
     if (!customer_name || String(customer_name).trim() === '') {
-      return res.status(400).json({ error: 'customer_name is required' })
+      return res.status(400).json({ message: 'customer is required' })
     }
 
     const items = normalizeItems(rawItems)
 
-    const round2 = (n) => Math.round(Number(n || 0) * 100) / 100
-
     if (!items || !items.length) {
-      return res.status(400).json({ error: 'items required' })
+      return res.status(400).json({ message: 'items required' })
     }
+
+    const round2 = (n) => Math.round(Number(n || 0) * 100) / 100
 
     const computedItems = items.map((it) => {
       const quantity = Number(it.quantity || 0)
@@ -254,6 +257,10 @@ router.post('/', async (req, res) => {
     const computedTotal = round2(
       computedSubtotal + computedVatAmount,
     )
+
+    if (total == null || Number(total) <= 0) {
+      return res.status(400).json({ message: 'total is required' })
+    }
 
     const { rows: nowRows } = await client.query(
       `SELECT TO_CHAR(NOW(), 'YYYYMM') as yyyymm`,
@@ -344,7 +351,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    res.status(201).json(inv)
+    return res.status(201).json(inv)
   } catch (err) {
     try {
       await client.query('ROLLBACK')
@@ -354,7 +361,7 @@ router.post('/', async (req, res) => {
     if (err.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
     }
-    console.error('POST /invoices error:', err)
+    console.error('CREATE INVOICE ERROR:', err)
     return res.status(500).json({
       message: 'Create invoice failed',
       error: err.message,

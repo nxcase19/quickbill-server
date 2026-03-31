@@ -2,6 +2,7 @@
  * Centralized SaaS-style HTML for Puppeteer PDFs (PO, Invoice, QT, DN, Receipt).
  */
 
+import path from 'node:path'
 import { formatDate } from './formatDate.js'
 import { resolvePdfLogoAbsoluteUrl } from './pdfLogoUrl.js'
 
@@ -315,13 +316,25 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
 
   console.log('PDF company:', company)
 
+  // Thai font for PDF (NotoSansThai or compatible) loaded from local filesystem for Puppeteer.
+  // Expect font file at: <project-root>/fonts/NotoSansThai-Regular.ttf
+  const fontPath = path.join(process.cwd(), 'fonts', 'NotoSansThai-Regular.ttf')
+  const fontUrl = `file://${fontPath.replace(/\\/g, '/')}`
+
   return `<!DOCTYPE html>
 <html lang="${isTH ? 'th' : 'en'}">
 <head>
   <meta charset="utf-8" />
   <style>
+    @font-face {
+      font-family: 'TH';
+      src: url('${fontUrl}') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+
     body {
-      font-family: 'Sarabun', sans-serif;
+      font-family: 'TH', sans-serif;
       padding: 48px;
       color: #0f172a;
       margin: 0;
