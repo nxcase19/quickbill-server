@@ -20,23 +20,21 @@ import { handleStripeWebhook } from './routes/billing.js'
 
 const app = express()
 
-// 🔥 MUST BE FIRST
+// CORS must be before all routes (including auth)
+app.use(
+  cors({
+    origin: 'https://quickbill-web.vercel.app',
+    credentials: true,
+  }),
+)
+
+app.options('*', cors())
+
+// 🔥 MUST BE FIRST (Stripe webhook uses raw body)
 app.post(
   '/api/billing/webhook',
   express.raw({ type: 'application/json' }),
   handleStripeWebhook,
-)
-
-app.use(
-  (req, res, next) => {
-    res.header('Access-Control-Allow-Origin', 'https://quickbill-web.vercel.app')
-    res.header(
-      'Access-Control-Allow-Headers',
-      'Origin, X-Requested-With, Content-Type, Accept, Authorization',
-    )
-    res.header('Access-Control-Allow-Credentials', 'true')
-    next()
-  },
 )
 
 // ❗ แล้วค่อยมี
@@ -56,29 +54,26 @@ app.get('/api/test', (req, res) => {
   res.json({ ok: true })
 })
 
-/**
- * Route policy:
- * - Public: /api/auth/* (login, register) — must stay before authMiddleware on /api.
- * - Protected: all other /api/* — require Bearer JWT; req.account_id from token only.
- */
+// Route policy:
+// - Public: /api/auth/* (login, register) — no auth middleware
+// - Protected: selected /api/* — require Bearer JWT via authMiddleware
 app.use('/api/auth', authRoutes)
-app.use('/api', authMiddleware)
-app.use('/api/billing', billingRoutes)
-app.use('/api/customers', customersRoutes)
-app.use('/api/products', productsRoutes)
-app.use('/api/documents', documentsRoutes)
-app.use('/api/orders', ordersRoutes)
-app.use('/api/payments', paymentsRouter)
-app.use('/api/reports', reportsRoutes)
-app.use('/api/company', companyRoutes)
-app.use('/api/company-settings', companyRoutes)
-app.use('/api/purchases', purchasesRoutes)
-app.use('/api/purchase-invoices', purchasesRoutes)
-app.use('/api/po', purchaseOrdersRoutes)
-app.use('/api/purchase-orders', purchaseOrdersRoutes)
-app.use('/api/invoices', invoicesRoutes)
-app.use('/api/ocr', ocrRoutes)
-app.use('/api/suppliers', suppliersRoutes)
+app.use('/api/billing', authMiddleware, billingRoutes)
+app.use('/api/customers', authMiddleware, customersRoutes)
+app.use('/api/products', authMiddleware, productsRoutes)
+app.use('/api/documents', authMiddleware, documentsRoutes)
+app.use('/api/orders', authMiddleware, ordersRoutes)
+app.use('/api/payments', authMiddleware, paymentsRouter)
+app.use('/api/reports', authMiddleware, reportsRoutes)
+app.use('/api/company', authMiddleware, companyRoutes)
+app.use('/api/company-settings', authMiddleware, companyRoutes)
+app.use('/api/purchases', authMiddleware, purchasesRoutes)
+app.use('/api/purchase-invoices', authMiddleware, purchasesRoutes)
+app.use('/api/po', authMiddleware, purchaseOrdersRoutes)
+app.use('/api/purchase-orders', authMiddleware, purchaseOrdersRoutes)
+app.use('/api/invoices', authMiddleware, invoicesRoutes)
+app.use('/api/ocr', authMiddleware, ocrRoutes)
+app.use('/api/suppliers', authMiddleware, suppliersRoutes)
 
 app.use((err, req, res, next) => {
   console.error('GLOBAL ERROR:', err)
