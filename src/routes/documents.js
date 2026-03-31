@@ -321,328 +321,332 @@ router.get('/:id', async (req, res) => {
 })
 
 router.post('/', assertCanCreateDocument, async (req, res) => {
-  const account_id =
+  try {
+    const account_id =
     req.account_id ??
     req.user?.account_id ??
     (req.user?.accountId != null ? String(req.user.accountId) : null)
 
-  if (!account_id) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing account_id',
-    })
-  }
-
-  const accountId = account_id
-
-  console.log('DOCUMENT BODY:', req.body)
-
-  logTenantAccess('POST /api/documents', req)
-
-  const rawDocTypes = Array.isArray(req.body.doc_types)
-    ? req.body.doc_types
-    : [req.body.doc_type || 'INV']
-
-  const docTypes = rawDocTypes
-    .map((t) => String(t).trim().toUpperCase())
-    .filter((t) => t.length > 0)
-
-  if (docTypes.length === 0) {
-    return res.status(400).json({ success: false, error: 'doc_types is required' })
-  }
-
-  const allowedDocTypes = ['QT', 'DN', 'INV', 'RC']
-  for (const dt of docTypes) {
-    if (!allowedDocTypes.includes(dt)) {
-      return res.status(400).json({ success: false, error: 'Invalid doc_type: ' + dt })
+    if (!account_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing account_id',
+      })
     }
-  }
 
-  const plan = String(req.user?.plan || 'free').toLowerCase()
-  const isTrial = req.user?.is_trial_active === true
+    const accountId = account_id
 
-  const countResult = await safeQuery(
-    pool,
-    `SELECT COUNT(*)::int AS count
+    console.log('DOCUMENT BODY:', req.body)
+
+    logTenantAccess('POST /api/documents', req)
+
+    const rawDocTypes = Array.isArray(req.body.doc_types)
+      ? req.body.doc_types
+      : [req.body.doc_type || 'INV']
+
+    const docTypes = rawDocTypes
+      .map((t) => String(t).trim().toUpperCase())
+      .filter((t) => t.length > 0)
+
+    if (docTypes.length === 0) {
+      return res.status(400).json({ success: false, error: 'doc_types is required' })
+    }
+
+    const allowedDocTypes = ['QT', 'DN', 'INV', 'RC']
+    for (const dt of docTypes) {
+      if (!allowedDocTypes.includes(dt)) {
+        return res.status(400).json({ success: false, error: 'Invalid doc_type: ' + dt })
+      }
+    }
+
+    const plan = String(req.user?.plan || 'free').toLowerCase()
+    const isTrial = req.user?.is_trial_active === true
+
+    const countResult = await safeQuery(
+      pool,
+      `SELECT COUNT(*)::int AS count
      FROM documents
      WHERE account_id = $1::uuid
        AND created_at::date = CURRENT_DATE`,
-    [account_id],
-    { skipAssert: true },
-  )
+    const todayCount = Number(countResult.rows[0]?.count ?? 0)
+    const pendingDocs = docTypes.length
 
-  const todayCount = Number(countResult.rows[0]?.count ?? 0)
-  const pendingDocs = docTypes.length
+    if (
+      !isTrial &&
+      plan === 'free' &&
+      todayCount + pendingDocs > FREE_DAILY_DOC_LIMIT
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: 'LIMIT_REACHED',
+        error: 'คุณใช้ครบ 3 เอกสารต่อวันแล้ว กรุณาอัปเกรดแพ็กเกจ',
+      })
+    }
 
-  if (
-    !isTrial &&
-    plan === 'free' &&
-    todayCount + pendingDocs > FREE_DAILY_DOC_LIMIT
-  ) {
-    return res.status(403).json({
-      success: false,
-      code: 'LIMIT_REACHED',
-      error: 'คุณใช้ครบ 3 เอกสารต่อวันแล้ว กรุณาอัปเกรดแพ็กเกจ',
+    const docDateRaw = req.body.doc_date ?? req.body.docDate
+    const customerId =
+      req.body.customerId != null ? req.body.customerId : req.body.customer_id
+    const customerNameInput = String(req.body.customer_name ?? '').trim()
+    const customerAddressInput = String(req.body.customer_address ?? '').trim()
+    const customerPhoneInput = String(req.body.customer_phone ?? '').trim()
+    const customerTaxInput = String(req.body.customer_tax_id ?? req.body.tax_id ?? '').trim()
+    const items = Array.isArray(req.body.items) ? req.body.items : []
+
+    if (items.length === 0) {
+      return res.status(400).json({ success: false, error: 'items must not be empty' })
+    }
+
+    let subtotal = 0
+    const normalizedItems = []
+    for (const it of items) {
+      const qty = Number(it.qty) || 0
+      const unitPrice =
+        it.unitPrice != null
+          ? Number(it.unitPrice)
+          : it.unit_price != null
+            ? Number(it.unit_price)
+            : 0
+      const desc = it.description != null ? String(it.description) : ''
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ success: false, error: 'qty must be greater than 0' })
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return res.status(400).json({ success: false, error: 'unit_price must be >= 0' })
+      }
+      const lineTotal = qty * unitPrice
+      subtotal += lineTotal
+      normalizedItems.push({ description: desc, qty, unitPrice, lineTotal })
+    }
+
+    const body = req.body
+    const vatEnabled = body.vat_enabled ?? body.vatEnabled ?? true
+
+    const vatRate = vatEnabled
+      ? Number(body.vat_rate ?? body.vatRate ?? 0)
+      : 0
+    const vatAmount = subtotal * vatRate
+    const total = subtotal + vatAmount
+
+    const note = req.body.note ? String(req.body.note) : ''
+
+    console.log('VAT DEBUG:', {
+      subtotal,
+      vatRate,
+      vatAmount,
+      total,
     })
-  }
 
-  const docDateRaw = req.body.doc_date ?? req.body.docDate
-  const customerId =
-    req.body.customerId != null ? req.body.customerId : req.body.customer_id
-  const customerNameInput = String(req.body.customer_name ?? '').trim()
-  const customerAddressInput = String(req.body.customer_address ?? '').trim()
-  const customerPhoneInput = String(req.body.customer_phone ?? '').trim()
-  const customerTaxInput = String(req.body.customer_tax_id ?? req.body.tax_id ?? '').trim()
-  const items = Array.isArray(req.body.items) ? req.body.items : []
+    const docDate =
+      docDateRaw != null && String(docDateRaw).trim() !== ''
+        ? String(docDateRaw).slice(0, 10)
+        : new Date().toISOString().slice(0, 10)
 
-  if (items.length === 0) {
-    return res.status(400).json({ success: false, error: 'items must not be empty' })
-  }
+    const client = await pool.connect()
+    let committed = false
+    try {
+      let customerSnapshot = {
+        name: customerNameInput,
+        address: customerAddressInput,
+        phone: customerPhoneInput,
+        tax_id: customerTaxInput,
+      }
 
-  let subtotal = 0
-  const normalizedItems = []
-  for (const it of items) {
-    const qty = Number(it.qty) || 0
-    const unitPrice =
-      it.unitPrice != null
-        ? Number(it.unitPrice)
-        : it.unit_price != null
-          ? Number(it.unit_price)
-          : 0
-    const desc = it.description != null ? String(it.description) : ''
-    if (!Number.isFinite(qty) || qty <= 0) {
-      return res.status(400).json({ success: false, error: 'qty must be greater than 0' })
-    }
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-      return res.status(400).json({ success: false, error: 'unit_price must be >= 0' })
-    }
-    const lineTotal = qty * unitPrice
-    subtotal += lineTotal
-    normalizedItems.push({ description: desc, qty, unitPrice, lineTotal })
-  }
-
-  const body = req.body
-  const vatEnabled = body.vat_enabled ?? body.vatEnabled ?? true
-
-  const vatRate = vatEnabled
-    ? Number(body.vat_rate ?? body.vatRate ?? 0)
-    : 0
-  const vatAmount = subtotal * vatRate
-  const total = subtotal + vatAmount
-
-  const note = req.body.note ? String(req.body.note) : ''
-
-  console.log('VAT DEBUG:', {
-    subtotal,
-    vatRate,
-    vatAmount,
-    total,
-  })
-
-  const docDate =
-    docDateRaw != null && String(docDateRaw).trim() !== ''
-      ? String(docDateRaw).slice(0, 10)
-      : new Date().toISOString().slice(0, 10)
-
-  const client = await pool.connect()
-  let committed = false
-  try {
-    let customerSnapshot = {
-      name: customerNameInput,
-      address: customerAddressInput,
-      phone: customerPhoneInput,
-      tax_id: customerTaxInput,
-    }
-
-    if (customerId != null && String(customerId).trim() !== '') {
-      const twCust = buildTenantWhereClause(req, '', 2)
-      const { rows: custRows } = await safeQuery(
-        client,
-        `SELECT name, address, phone, tax_id FROM customers WHERE id = $1 AND ${twCust.clause}`,
-        [customerId, twCust.param],
-      )
-      if (custRows.length > 0) {
-        const c = custRows[0]
-        customerSnapshot = {
-          name: customerSnapshot.name || String(c.name ?? '').trim(),
-          address: customerSnapshot.address || String(c.address ?? '').trim(),
-          phone: customerSnapshot.phone || String(c.phone ?? '').trim(),
-          tax_id: customerSnapshot.tax_id || String(c.tax_id ?? '').trim(),
+      if (customerId != null && String(customerId).trim() !== '') {
+        const twCust = buildTenantWhereClause(req, '', 2)
+        const { rows: custRows } = await safeQuery(
+          client,
+          `SELECT name, address, phone, tax_id FROM customers WHERE id = $1 AND ${twCust.clause}`,
+          [customerId, twCust.param],
+        )
+        if (custRows.length > 0) {
+          const c = custRows[0]
+          customerSnapshot = {
+            name: customerSnapshot.name || String(c.name ?? '').trim(),
+            address: customerSnapshot.address || String(c.address ?? '').trim(),
+            phone: customerSnapshot.phone || String(c.phone ?? '').trim(),
+            tax_id: customerSnapshot.tax_id || String(c.tax_id ?? '').trim(),
+          }
         }
       }
-    }
-    if (!customerSnapshot.name) {
-      return res.status(400).json({ success: false, error: 'customer_name is required' })
-    }
+      if (!customerSnapshot.name) {
+        return res.status(400).json({ success: false, error: 'customer_name is required' })
+      }
 
-    const company = await getCompany(pool, accountId)
-    console.log('SNAPSHOT COMPANY BEFORE INSERT:', company)
-    console.log('FINAL SNAPSHOT:', {
-      name: company.name_th,
-      address: company.address,
-      phone: company.phone,
-      logo: company.logo_url,
-    })
+      const company = await getCompany(pool, accountId)
+      console.log('SNAPSHOT COMPANY BEFORE INSERT:', company)
+      console.log('FINAL SNAPSHOT:', {
+        name: company.name_th,
+        address: company.address,
+        phone: company.phone,
+        logo: company.logo_url,
+      })
 
-    await client.query('BEGIN')
+      await client.query('BEGIN')
 
-    const orderId = Date.now().toString()
-    const primaryType = docTypes.includes('INV') ? 'INV' : docTypes[0]
-    const legacyCompanyId = legacyCompanyIdForInsert(req)
+      const orderId = Date.now().toString()
+      const primaryType = docTypes.includes('INV') ? 'INV' : docTypes[0]
+      const legacyCompanyId = legacyCompanyIdForInsert(req)
 
-    console.log('POST /documents tenant', { accountId })
-    console.log('POST /documents docTypes', docTypes)
-    console.log('POST /documents customerId', customerId)
-    console.log('documents POST order_id:', orderId)
-    const createdDocs = []
+      console.log('POST /documents tenant', { accountId })
+      console.log('POST /documents docTypes', docTypes)
+      console.log('POST /documents customerId', customerId)
+      console.log('documents POST order_id:', orderId)
+      const createdDocs = []
 
-    for (const type of docTypes) {
-      const now = new Date()
-      const year = now.getFullYear()
-      const month = String(now.getMonth() + 1).padStart(2, '0')
-      const prefix = docTypeToPrefix(type)
-      const { rows: countRows } = await safeQuery(
-        client,
-        `SELECT COUNT(*)::int AS count
-         FROM documents
-         WHERE account_id = $1::uuid
-           AND EXTRACT(YEAR FROM doc_date) = $2`,
-        [accountId, year],
-      )
-      const running = String(Number(countRows[0]?.count ?? 0) + 1).padStart(4, '0')
-      const docNo = `${prefix}-${year}${month}-${running}`
+      for (const type of docTypes) {
+        const now = new Date()
+        const year = now.getFullYear()
+        const month = String(now.getMonth() + 1).padStart(2, '0')
+        const prefix = docTypeToPrefix(type)
+        const { rows: countRows } = await safeQuery(
+          client,
+          `SELECT COUNT(*)::int AS count
+           FROM documents
+           WHERE account_id = $1::uuid
+             AND EXTRACT(YEAR FROM doc_date) = $2`,
+          [accountId, year],
+        )
+        const running = String(Number(countRows[0]?.count ?? 0) + 1).padStart(4, '0')
+        const docNo = `${prefix}-${year}${month}-${running}`
 
-      let insertSql
-      let insertParams
-      if (legacyCompanyId != null) {
-        insertSql = `INSERT INTO documents (
+        let insertSql
+        let insertParams
+        if (legacyCompanyId != null) {
+          insertSql = `INSERT INTO documents (
       account_id, company_id, company_name, company_address, company_phone, company_tax_id, company_logo_url, customer_name, customer_address, customer_phone, customer_tax_id, doc_no, doc_type, doc_date,
       subtotal, vat_enabled, vat_rate, total, payment_status, status, order_id, note
     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::date,CURRENT_DATE),$15,$16,$17,$18,'unpaid','draft',$19,$20)
     RETURNING id`
-        insertParams = [
-          accountId,
-          legacyCompanyId,
-          company.name_th,
-          company.address,
-          company.phone,
-          company.tax_id,
-          company.logo_url,
-          customerSnapshot.name,
-          customerSnapshot.address,
-          customerSnapshot.phone,
-          customerSnapshot.tax_id,
-          docNo,
-          prefix,
-          docDate,
-          subtotal,
-          vatEnabled,
-          vatRate,
-          total,
-          orderId,
-          note,
-        ]
-      } else {
-        insertSql = `INSERT INTO documents (
+          insertParams = [
+            accountId,
+            legacyCompanyId,
+            company.name_th,
+            company.address,
+            company.phone,
+            company.tax_id,
+            company.logo_url,
+            customerSnapshot.name,
+            customerSnapshot.address,
+            customerSnapshot.phone,
+            customerSnapshot.tax_id,
+            docNo,
+            prefix,
+            docDate,
+            subtotal,
+            vatEnabled,
+            vatRate,
+            total,
+            orderId,
+            note,
+          ]
+        } else {
+          insertSql = `INSERT INTO documents (
       account_id, company_name, company_address, company_phone, company_tax_id, company_logo_url, customer_name, customer_address, customer_phone, customer_tax_id, doc_no, doc_type, doc_date,
       subtotal, vat_enabled, vat_rate, total, payment_status, status, order_id, note
     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date,CURRENT_DATE),$14,$15,$16,$17,'unpaid','draft',$18,$19)
     RETURNING id`
-        insertParams = [
-          accountId,
-          company.name_th,
-          company.address,
-          company.phone,
-          company.tax_id,
-          company.logo_url,
-          customerSnapshot.name,
-          customerSnapshot.address,
-          customerSnapshot.phone,
-          customerSnapshot.tax_id,
-          docNo,
-          prefix,
-          docDate,
-          subtotal,
-          vatEnabled,
-          vatRate,
-          total,
-          orderId,
-          note,
-        ]
-      }
+          insertParams = [
+            accountId,
+            company.name_th,
+            company.address,
+            company.phone,
+            company.tax_id,
+            company.logo_url,
+            customerSnapshot.name,
+            customerSnapshot.address,
+            customerSnapshot.phone,
+            customerSnapshot.tax_id,
+            docNo,
+            prefix,
+            docDate,
+            subtotal,
+            vatEnabled,
+            vatRate,
+            total,
+            orderId,
+            note,
+          ]
+        }
 
-      let docRows
-      try {
-        const result = await safeQuery(client, insertSql, insertParams)
-        docRows = result.rows
-      } catch (err) {
-        console.error('DOCUMENT INSERT ERROR:', err)
-        throw err
-      }
+        let docRows
+        try {
+          const result = await safeQuery(client, insertSql, insertParams)
+          docRows = result.rows
+        } catch (err) {
+          console.error('DOCUMENT INSERT ERROR:', err)
+          throw err
+        }
 
-      const newDocId = docRows[0].id
+        const newDocId = docRows[0].id
 
-      if (type === primaryType) {
-        let lineNo = 1
-        for (const it of normalizedItems) {
-          await safeQuery(
-            client,
-            `INSERT INTO document_items (
+        if (type === primaryType) {
+          let lineNo = 1
+          for (const it of normalizedItems) {
+            await safeQuery(
+              client,
+              `INSERT INTO document_items (
         document_id, line_no, description, qty, unit_price, line_total
       ) VALUES ($1,$2,$3,$4,$5,$6)`,
-            [
-              newDocId,
-              lineNo,
-              it.description,
-              it.qty,
-              it.unitPrice,
-              it.lineTotal,
-            ],
-            { skipAssert: true },
-          )
-          lineNo += 1
+              [
+                newDocId,
+                lineNo,
+                it.description,
+                it.qty,
+                it.unitPrice,
+                it.lineTotal,
+              ],
+              { skipAssert: true },
+            )
+            lineNo += 1
+          }
         }
+
+        createdDocs.push({
+          id: newDocId,
+          doc_no: docNo,
+          doc_type: prefix,
+          order_id: orderId,
+        })
       }
 
-      createdDocs.push({
-        id: newDocId,
-        doc_no: docNo,
-        doc_type: prefix,
-        order_id: orderId,
+      await client.query('COMMIT')
+      committed = true
+
+      try {
+        await incrementDocumentUsage(pool, accountId, createdDocs.length)
+      } catch (incErr) {
+        console.error('incrementDocumentUsage:', incErr)
+      }
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          order_id: orderId,
+          documents: createdDocs,
+          subtotal,
+          vat_rate: vatRate,
+          vat_amount: vatAmount,
+          total,
+        },
       })
+    } catch (err) {
+      if (!committed) {
+        await client.query('ROLLBACK')
+      }
+      console.error('DOCUMENT CREATE ERROR:', err)
+      return res.status(500).json({
+        success: false,
+        error: err.message || 'Create document failed',
+      })
+    } finally {
+      client.release()
     }
-
-    await client.query('COMMIT')
-    committed = true
-
-    try {
-      await incrementDocumentUsage(pool, accountId, createdDocs.length)
-    } catch (incErr) {
-      console.error('incrementDocumentUsage:', incErr)
-    }
-
-    return res.status(201).json({
-      success: true,
-      data: {
-        order_id: orderId,
-        documents: createdDocs,
-        subtotal,
-        vat_rate: vatRate,
-        vat_amount: vatAmount,
-        total,
-      },
-    })
   } catch (err) {
-    if (!committed) {
-      await client.query('ROLLBACK')
-    }
-    console.error('documents POST error:', err)
+    console.error('DOCUMENT CREATE ERROR:', err)
     return res.status(500).json({
       success: false,
-      error: err.message,
+      error: err.message || 'Create document failed',
     })
-  } finally {
-    client.release()
   }
 })
 

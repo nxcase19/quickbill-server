@@ -28,13 +28,16 @@ app.post(
 )
 
 app.use(
-  cors({
-    origin: ['https://quickbill-web.vercel.app', 'http://localhost:5173'],
-    credentials: true,
-  }),
+  (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', 'https://quickbill-web.vercel.app')
+    res.header(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization',
+    )
+    res.header('Access-Control-Allow-Credentials', 'true')
+    next()
+  },
 )
-
-app.options('*', cors())
 
 // ❗ แล้วค่อยมี
 app.use(express.json())
