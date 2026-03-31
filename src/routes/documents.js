@@ -280,10 +280,7 @@ router.get('/:id/pdf', async (req, res) => {
     await browser.close()
 
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename=${kind}-${document.doc_no || 'doc'}.pdf`,
-    )
+    res.setHeader('Content-Disposition', 'inline; filename="document.pdf"')
     return res.end(pdfBuffer)
   } catch (err) {
     console.error('documents GET /:id/pdf error:', err)

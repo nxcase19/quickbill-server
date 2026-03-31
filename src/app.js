@@ -68,11 +68,9 @@ app.use('/api/ocr', ocrRoutes)
 app.use('/api/suppliers', suppliersRoutes)
 
 app.use((err, req, res, next) => {
-  console.error('GLOBAL ERROR:', err)
+  console.error(err)
   res.status(500).json({
-    success: false,
-    error: err.message || 'Internal server error',
-    message: err.message || 'Internal server error',
+    message: 'Internal Server Error',
   })
 })
 

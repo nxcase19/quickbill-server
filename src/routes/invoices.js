@@ -157,10 +157,7 @@ router.get('/:id/pdf', async (req, res) => {
     await browser.close()
 
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename=INV-${inv.doc_no || 'invoice'}.pdf`,
-    )
+    res.setHeader('Content-Disposition', 'inline; filename="document.pdf"')
 
     return res.end(pdfBuffer)
   } catch (err) {
@@ -358,7 +355,10 @@ router.post('/', async (req, res) => {
       return res.status(401).json({ error: 'Missing account_id' })
     }
     console.error('POST /invoices error:', err)
-    res.status(500).json({ error: err.message })
+    return res.status(500).json({
+      message: 'Create invoice failed',
+      error: err.message,
+    })
   } finally {
     client.release()
   }
