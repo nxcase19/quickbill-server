@@ -368,7 +368,18 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
      FROM documents
      WHERE account_id = $1::uuid
        AND created_at::date = CURRENT_DATE`,
-    const todayCount = Number(countResult.rows[0]?.count ?? 0)
+      [account_id],
+      { skipAssert: true },
+    )
+    let todayCount = 0
+    if (
+      countResult &&
+      countResult.rows &&
+      countResult.rows[0] &&
+      countResult.rows[0].count != null
+    ) {
+      todayCount = Number(countResult.rows[0].count)
+    }
     const pendingDocs = docTypes.length
 
     if (
