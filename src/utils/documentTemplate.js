@@ -3,6 +3,7 @@
  */
 
 import path from 'node:path'
+import fs from 'node:fs'
 import { formatDate } from './formatDate.js'
 import { resolvePdfLogoAbsoluteUrl } from './pdfLogoUrl.js'
 
@@ -316,25 +317,34 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
 
   console.log('PDF company:', company)
 
-  // Thai font for PDF (NotoSansThai or compatible) loaded from local filesystem for Puppeteer.
-  // Expect font file at: <project-root>/fonts/NotoSansThai-Regular.ttf
-  const fontPath = path.join(process.cwd(), 'fonts', 'NotoSansThai-Regular.ttf')
-  const fontUrl = `file://${fontPath.replace(/\\/g, '/')}`
+  // Thai font for PDF loaded from local filesystem for Puppeteer.
+  // Expect font file at: <project-root>/src/fonts/THSarabunNew.ttf
+  // Use __dirname-equivalent for ES modules, avoid process.cwd().
+  const __dirname = path.dirname(new URL(import.meta.url).pathname)
+  const fontPath = path.join(__dirname, '../fonts/THSarabunNew.ttf')
+  let fontUrl = ''
+  if (!fs.existsSync(fontPath)) {
+    console.error('FONT NOT FOUND:', fontPath)
+  } else {
+    fontUrl = `file://${fontPath.replace(/\\/g, '/')}`
+  }
 
   return `<!DOCTYPE html>
 <html lang="${isTH ? 'th' : 'en'}">
 <head>
   <meta charset="utf-8" />
   <style>
-    @font-face {
+    ${fontUrl
+      ? `@font-face {
       font-family: 'TH';
       src: url('${fontUrl}') format('truetype');
       font-weight: 400;
       font-style: normal;
-    }
+    }`
+      : ''}
 
     body {
-      font-family: 'TH', sans-serif;
+      font-family: ${fontUrl ? "'TH', sans-serif" : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"};
       padding: 48px;
       color: #0f172a;
       margin: 0;
