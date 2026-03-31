@@ -1,0 +1,4 @@
+ALTER TABLE customers
+ADD COLUMN phone TEXT,
+ADD COLUMN address TEXT,
+ADD COLUMN tax_id TEXT;

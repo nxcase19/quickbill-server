@@ -1,0 +1,4 @@
+ALTER TABLE documents
+ADD COLUMN IF NOT EXISTS customer_address TEXT,
+ADD COLUMN IF NOT EXISTS customer_phone TEXT,
+ADD COLUMN IF NOT EXISTS customer_tax_id TEXT;

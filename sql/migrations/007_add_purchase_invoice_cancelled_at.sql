@@ -1,0 +1,2 @@
+ALTER TABLE purchase_invoices
+ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP NULL;
