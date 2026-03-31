@@ -29,7 +29,7 @@ app.post(
 
 app.use(
   cors({
-    origin: true,
+    origin: 'https://quickbill-web.vercel.app',
     credentials: true,
     exposedHeaders: ['Content-Disposition'],
   }),
