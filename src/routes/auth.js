@@ -81,6 +81,16 @@ router.get('/me', async (req, res) => {
     if (!row) {
       return res.status(404).json({ success: false, error: 'Account not found' })
     }
+    const { rows: userRows } = await safeQuery(
+      pool,
+      `SELECT id, email FROM users WHERE id = $1`,
+      [decoded.user_id],
+      { skipAssert: true },
+    )
+    const dbUser = userRows[0] ?? null
+    if (dbUser) {
+      console.log('AUTH USER:', dbUser)
+    }
     const account = mapAccountRowWithPlan(row)
     return res.json({
       success: true,
@@ -89,6 +99,7 @@ router.get('/me', async (req, res) => {
         is_trial_active: isTrialActive(row),
         user_id: decoded.user_id,
         email: decoded.email != null ? String(decoded.email) : '',
+        user: dbUser,
       },
     })
   } catch (err) {
