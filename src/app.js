@@ -29,11 +29,12 @@ app.post(
 
 app.use(
   cors({
-    origin: 'https://quickbill-web.vercel.app',
+    origin: ['http://localhost:5173', 'https://quickbill-web.vercel.app'],
     credentials: true,
-    exposedHeaders: ['Content-Disposition'],
   }),
 )
+
+app.options('*', cors())
 
 // ❗ แล้วค่อยมี
 app.use(express.json())
