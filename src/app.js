@@ -39,8 +39,13 @@ app.use(
 app.use(express.json())
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')))
 
+// Public health checks (no auth required)
 app.get('/health', (req, res) => {
   res.json({ ok: true })
+})
+
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, message: 'API OK' })
 })
 
 /**
