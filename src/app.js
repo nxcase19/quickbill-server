@@ -27,14 +27,12 @@ app.post(
   handleStripeWebhook,
 )
 
-app.use(
-  cors({
-    origin: ['http://localhost:5173', 'https://quickbill-web.vercel.app'],
-    credentials: true,
-  }),
-)
-
-app.options('*', cors())
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*')
+  res.header('Access-Control-Allow-Headers', '*')
+  res.header('Access-Control-Allow-Methods', '*')
+  next()
+})
 
 // ❗ แล้วค่อยมี
 app.use(express.json())

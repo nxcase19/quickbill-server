@@ -2,7 +2,7 @@ import pkg from 'pg'
 
 const { Pool } = pkg
 
-console.log('DATABASE_URL:', process.env.DATABASE_URL)
+console.log('DB CONNECT:', process.env.DATABASE_URL?.slice(0, 50))
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -10,3 +10,5 @@ export const pool = new Pool({
     rejectUnauthorized: false,
   },
 })
+
+export default pool
