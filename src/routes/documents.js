@@ -302,21 +302,53 @@ html, body, div, span, p, table, td, th, strong, b, small {
 
 body {
   font-size: 24px !important;
-  line-height: 1.3;
+  line-height: 1.1 !important;
   padding: 40px;
 }
 
 /* tighter line-height for text blocks */
 p, div, span {
-  line-height: 1.3 !important;
+  line-height: 1.1 !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-td, th {
-  line-height: 1.2 !important;
-}
-
+/* header */
 .company, .meta {
-  line-height: 1.3 !important;
+  line-height: 1.15 !important;
+}
+
+/* table */
+table {
+  margin-top: 20px;
+}
+
+th, td {
+  line-height: 1.1 !important;
+  padding: 8px 10px !important;
+}
+
+/* box */
+.box {
+  padding: 12px !important;
+}
+
+/* total */
+.total-box {
+  padding: 12px !important;
+}
+
+.total-row {
+  margin-bottom: 4px !important;
+}
+
+/* signature */
+.signature {
+  margin-top: 40px !important;
+}
+
+.sign-line {
+  margin-top: 40px !important;
 }
 
 /* header overrides */
