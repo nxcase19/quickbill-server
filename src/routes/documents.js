@@ -296,104 +296,98 @@ router.get('/:id/pdf', async (req, res) => {
 }
 
 body {
-  font-size: 20px;
-  line-height: 1.6;
+  font-size: 24px;
+  line-height: 1.7;
   color: #111;
   padding: 40px;
 }
 
 /* HEADER */
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 30px;
-}
-
 .company {
-  font-size: 22px;
-  line-height: 1.5;
+  font-size: 26px;
 }
 
 .doc-title {
-  font-size: 32px;
+  font-size: 36px;
   font-weight: bold;
 }
 
 .meta {
-  font-size: 20px;
-  margin-top: 5px;
+  font-size: 22px;
 }
 
 /* SECTION */
 .section {
-  margin-top: 25px;
+  margin-top: 30px;
 }
 
 /* BOX */
 .box {
   background: #f5f6f8;
-  padding: 15px;
-  border-radius: 8px;
-  margin-top: 10px;
+  padding: 18px;
+  border-radius: 10px;
+  margin-top: 12px;
+  font-size: 24px;
 }
 
 /* TABLE */
 table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 25px;
-  font-size: 20px;
+  margin-top: 30px;
+  font-size: 24px;
 }
 
 th {
   background: #f1f3f5;
-  padding: 12px;
-  text-align: left;
-  font-size: 22px;
+  padding: 14px;
+  font-size: 26px;
   font-weight: bold;
 }
 
 td {
-  padding: 12px;
+  padding: 14px;
   border-bottom: 1px solid #ddd;
+  font-size: 24px;
 }
 
 /* TOTAL BOX */
 .total-box {
-  margin-top: 25px;
+  margin-top: 30px;
   margin-left: auto;
-  width: 300px;
+  width: 340px;
   background: #f5f6f8;
-  padding: 15px;
-  border-radius: 8px;
+  padding: 18px;
+  border-radius: 10px;
+  font-size: 24px;
 }
 
 .total-row {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .total-final {
-  font-size: 24px;
+  font-size: 28px;
   font-weight: bold;
 }
 
 /* SIGNATURE */
 .signature {
-  margin-top: 60px;
+  margin-top: 80px;
   display: flex;
   justify-content: space-between;
 }
 
 .sign-box {
-  width: 40%;
+  width: 42%;
   text-align: center;
+  font-size: 22px;
 }
 
 .sign-line {
-  margin-top: 50px;
+  margin-top: 60px;
   border-top: 1px solid #000;
 }
 </style>
