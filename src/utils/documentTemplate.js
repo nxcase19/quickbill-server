@@ -318,15 +318,21 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   console.log('PDF company:', company)
 
   // Thai font for PDF loaded from local filesystem for Puppeteer.
-  // Expect font file at: <project-root>/assets/fonts/Sarabun-Regular.ttf
-  // Use __dirname-equivalent for ES modules, avoid process.cwd().
+  // Use base64-embedded @font-face so it works reliably in serverless/containers.
+  // Expect font file at: <project-root>/assets/fonts/THSarabun.ttf
   const __dirname = path.dirname(new URL(import.meta.url).pathname)
-  const fontPath = path.join(__dirname, '../assets/fonts/Sarabun-Regular.ttf')
-  let fontUrl = ''
-  if (!fs.existsSync(fontPath)) {
-    console.error('FONT NOT FOUND:', fontPath)
-  } else {
-    fontUrl = `file://${fontPath.replace(/\\/g, '/')}`
+  const fontPath = path.join(__dirname, '../assets/fonts/THSarabun.ttf')
+  let fontDataUrl = ''
+  try {
+    if (!fs.existsSync(fontPath)) {
+      console.error('FONT NOT FOUND:', fontPath)
+    } else {
+      const fontBuf = fs.readFileSync(fontPath)
+      const fontBase64 = fontBuf.toString('base64')
+      fontDataUrl = `data:font/truetype;charset=utf-8;base64,${fontBase64}`
+    }
+  } catch (e) {
+    console.error('FONT LOAD ERROR:', e)
   }
 
   return `<!DOCTYPE html>
@@ -334,17 +340,19 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
 <head>
   <meta charset="utf-8" />
   <style>
-    ${fontUrl
+    ${fontDataUrl
       ? `@font-face {
-      font-family: 'Sarabun';
-      src: url('${fontUrl}') format('truetype');
+      font-family: 'THSarabun';
+      src: url('${fontDataUrl}') format('truetype');
       font-weight: 400;
       font-style: normal;
     }`
       : ''}
 
     body {
-      font-family: ${fontUrl ? "'Sarabun', sans-serif" : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"};
+      font-family: ${fontDataUrl
+        ? "'THSarabun', sans-serif"
+        : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"};
       padding: 48px;
       color: #0f172a;
       margin: 0;
