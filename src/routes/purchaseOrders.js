@@ -1,5 +1,7 @@
 import { Router } from 'express'
 import puppeteer from 'puppeteer'
+import fs from 'node:fs'
+import path from 'node:path'
 import { pool } from '../db.js'
 import { buildTenantWhereClause } from '../utils/tenant.js'
 import { logTenantAccess } from '../utils/tenantDebug.js'
@@ -246,7 +248,17 @@ router.get('/:id/pdf', async (req, res) => {
 
     const watermarkText = await getPdfWatermarkText(pool, accountId)
 
-    const html = renderDocument({
+    // Load Thai font as base64 for Puppeteer embedding (same behavior as documents.js)
+    let fontBase64 = ''
+    try {
+      const fontPath = path.join(process.cwd(), 'assets/fonts/THSarabun.ttf')
+      const buf = fs.readFileSync(fontPath)
+      fontBase64 = buf.toString('base64')
+    } catch (e) {
+      console.error('PO PDF FONT LOAD ERROR:', e)
+    }
+
+    const rawHtml = renderDocument({
       type: 'po',
       data: {
         doc_no: po.doc_no,
@@ -266,6 +278,38 @@ router.get('/:id/pdf', async (req, res) => {
       lang: 'th',
       watermarkText,
     })
+
+    const html = fontBase64
+      ? `
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+@font-face {
+  font-family: 'THSarabun';
+  src: url('data:font/truetype;charset=utf-8;base64,${fontBase64}') format('truetype');
+}
+
+/* 🔥 บังคับทั้งระบบ */
+html, body, * {
+  font-family: 'THSarabun' !important;
+  font-size: 24px !important;
+  line-height: 1.15 !important;
+}
+
+/* กัน inline style */
+[style] {
+  font-size: 24px !important;
+}
+</style>
+</head>
+
+<body>
+${rawHtml}
+</body>
+</html>
+`
+      : rawHtml
 
     const browser = await puppeteer.launch({
       headless: true,
