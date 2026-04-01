@@ -290,86 +290,126 @@ router.get('/:id/pdf', async (req, res) => {
   src: url('data:font/truetype;charset=utf-8;base64,${fontBase64}') format('truetype');
 }
 
-/* 🔥 override all elements + inline font sizes */
-html, body, div, span, p, table, td, th, strong, b, small {
+* {
   font-family: 'THSarabun' !important;
-  font-size: 24px !important;
+  box-sizing: border-box;
 }
 
-[style] {
-  font-size: 24px !important;
-}
-
+/* BASE */
 body {
-  font-size: 24px !important;
-  line-height: 1.1 !important;
+  font-size: 24px;
+  line-height: 1.15;
+  color: #111;
   padding: 40px;
 }
 
-/* tighter line-height for text blocks */
-p, div, span {
-  line-height: 1.1 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-/* header */
-.company, .meta {
-  line-height: 1.15 !important;
-}
-
-/* table */
-table {
-  margin-top: 20px;
-}
-
-th, td {
-  line-height: 1.1 !important;
-  padding: 8px 10px !important;
-}
-
-/* box */
-.box {
-  padding: 12px !important;
-}
-
-/* total */
-.total-box {
-  padding: 12px !important;
-}
-
-.total-row {
-  margin-bottom: 4px !important;
-}
-
-/* signature */
-.signature {
-  margin-top: 40px !important;
-}
-
-.sign-line {
-  margin-top: 40px !important;
-}
-
-/* header overrides */
-.doc-title {
-  font-size: 36px !important;
+/* HEADER */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 15px;
 }
 
 .company {
-  font-size: 26px !important;
+  font-size: 26px;
+  font-weight: bold;
+}
+
+.meta {
+  font-size: 22px;
+  margin-top: 4px;
+}
+
+.doc-title {
+  font-size: 36px;
+  font-weight: bold;
+  text-align: right;
+}
+
+/* SECTION */
+.section {
+  margin-top: 20px;
+}
+
+/* CUSTOMER BOX */
+.box {
+  background: #f5f6f8;
+  padding: 12px;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+/* TABLE */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+  font-size: 24px;
 }
 
 th {
-  font-size: 26px !important;
+  background: #f1f3f5;
+  padding: 8px;
+  font-size: 24px;
+  text-align: left;
 }
 
 td {
-  font-size: 24px !important;
+  padding: 8px;
+  border-bottom: 1px solid #ddd;
+}
+
+/* 🔥 ALIGN ACCOUNTING STYLE */
+td:nth-child(3),
+td:nth-child(4),
+td:nth-child(5) {
+  text-align: right;
+}
+
+th:nth-child(3),
+th:nth-child(4),
+th:nth-child(5) {
+  text-align: right;
+}
+
+/* TOTAL BOX */
+.total-box {
+  margin-top: 15px;
+  margin-left: auto;
+  width: 280px;
+  background: #f5f6f8;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.total-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
 }
 
 .total-final {
-  font-size: 28px !important;
+  font-size: 28px;
+  font-weight: bold;
+}
+
+/* SIGNATURE */
+.signature {
+  margin-top: 50px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.sign-box {
+  width: 40%;
+  text-align: center;
+}
+
+.sign-line {
+  margin-top: 40px;
+  border-top: 1px solid #000;
 }
 </style>
 </head>
