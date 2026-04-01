@@ -318,10 +318,10 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   console.log('PDF company:', company)
 
   // Thai font for PDF loaded from local filesystem for Puppeteer.
-  // Expect font file at: <project-root>/src/fonts/THSarabunNew.ttf
+  // Expect font file at: <project-root>/assets/fonts/Sarabun-Regular.ttf
   // Use __dirname-equivalent for ES modules, avoid process.cwd().
   const __dirname = path.dirname(new URL(import.meta.url).pathname)
-  const fontPath = path.join(__dirname, '../fonts/THSarabunNew.ttf')
+  const fontPath = path.join(__dirname, '../assets/fonts/Sarabun-Regular.ttf')
   let fontUrl = ''
   if (!fs.existsSync(fontPath)) {
     console.error('FONT NOT FOUND:', fontPath)
@@ -336,7 +336,7 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   <style>
     ${fontUrl
       ? `@font-face {
-      font-family: 'TH';
+      font-family: 'Sarabun';
       src: url('${fontUrl}') format('truetype');
       font-weight: 400;
       font-style: normal;
@@ -344,7 +344,7 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
       : ''}
 
     body {
-      font-family: ${fontUrl ? "'TH', sans-serif" : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"};
+      font-family: ${fontUrl ? "'Sarabun', sans-serif" : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"};
       padding: 48px;
       color: #0f172a;
       margin: 0;
