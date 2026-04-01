@@ -290,136 +290,20 @@ router.get('/:id/pdf', async (req, res) => {
   src: url('data:font/truetype;charset=utf-8;base64,${fontBase64}') format('truetype');
 }
 
-* {
+/* 🔥 บังคับทั้งระบบ */
+html, body, * {
   font-family: 'THSarabun' !important;
-  box-sizing: border-box;
+  font-size: 24px !important;
+  line-height: 1.15 !important;
 }
 
-/* BASE */
-body {
-  font-size: 24px;
-  line-height: 1.15;
-  color: #111;
-  padding: 40px;
-}
-
-/* HEADER */
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  border-bottom: 1px solid #ddd;
-  padding-bottom: 15px;
-}
-
-.company {
-  font-size: 26px;
-  font-weight: bold;
-}
-
-.meta {
-  font-size: 22px;
-  margin-top: 4px;
-}
-
-.doc-title {
-  font-size: 36px;
-  font-weight: bold;
-  text-align: right;
-}
-
-/* SECTION */
-.section {
-  margin-top: 20px;
-}
-
-/* CUSTOMER BOX */
-.box {
-  background: #f5f6f8;
-  padding: 12px;
-  border-radius: 8px;
-  margin-top: 8px;
-}
-
-/* TABLE */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 20px;
-  font-size: 24px;
-}
-
-th {
-  background: #f1f3f5;
-  padding: 8px;
-  font-size: 24px;
-  text-align: left;
-}
-
-td {
-  padding: 8px;
-  border-bottom: 1px solid #ddd;
-}
-
-/* 🔥 ALIGN ACCOUNTING STYLE */
-td:nth-child(3),
-td:nth-child(4),
-td:nth-child(5) {
-  text-align: right;
-}
-
-th:nth-child(3),
-th:nth-child(4),
-th:nth-child(5) {
-  text-align: right;
-}
-
-/* TOTAL BOX */
-.total-box {
-  margin-top: 15px;
-  margin-left: auto;
-  width: 280px;
-  background: #f5f6f8;
-  padding: 12px;
-  border-radius: 8px;
-}
-
-.total-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.total-row span:last-child {
-  text-align: right;
-  min-width: 100px;
-}
-
-.total-final {
-  font-size: 28px;
-  font-weight: bold;
-  text-align: right;
-}
-
-/* SIGNATURE */
-.signature {
-  margin-top: 50px;
-  display: flex;
-  justify-content: space-between;
-}
-
-.sign-box {
-  width: 40%;
-  text-align: center;
-}
-
-.sign-line {
-  margin-top: 40px;
-  border-top: 1px solid #000;
+/* กัน inline style */
+[style] {
+  font-size: 24px !important;
 }
 </style>
 </head>
+
 <body>
 ${rawHtml}
 </body>
