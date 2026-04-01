@@ -290,105 +290,41 @@ router.get('/:id/pdf', async (req, res) => {
   src: url('data:font/truetype;charset=utf-8;base64,${fontBase64}') format('truetype');
 }
 
-* {
+/* 🔥 override all elements + inline font sizes */
+html, body, div, span, p, table, td, th, strong, b, small {
   font-family: 'THSarabun' !important;
-  box-sizing: border-box;
+  font-size: 24px !important;
+}
+
+[style] {
   font-size: 24px !important;
 }
 
 body {
-  font-size: 24px;
+  font-size: 24px !important;
   line-height: 1.7;
-  color: #111;
   padding: 40px;
 }
 
-/* HEADER */
+/* header overrides */
+.doc-title {
+  font-size: 36px !important;
+}
+
 .company {
   font-size: 26px !important;
 }
 
-.doc-title {
-  font-size: 36px !important;
-  font-weight: bold;
-}
-
-.meta {
-  font-size: 24px !important;
-}
-
-/* SECTION */
-.section {
-  margin-top: 30px;
-}
-
-/* BOX */
-.box {
-  background: #f5f6f8;
-  padding: 18px;
-  border-radius: 10px;
-  margin-top: 12px;
-  font-size: 24px !important;
-}
-
-/* TABLE */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 30px;
-}
-
 th {
-  background: #f1f3f5;
-  padding: 14px;
   font-size: 26px !important;
-  font-weight: bold;
 }
 
 td {
-  padding: 14px;
-  border-bottom: 1px solid #ddd;
   font-size: 24px !important;
-}
-
-/* TOTAL BOX */
-.total-box {
-  margin-top: 30px;
-  margin-left: auto;
-  width: 340px;
-  background: #f5f6f8;
-  padding: 18px;
-  border-radius: 10px;
-  font-size: 24px !important;
-}
-
-.total-row {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 10px;
 }
 
 .total-final {
   font-size: 28px !important;
-  font-weight: bold;
-}
-
-/* SIGNATURE */
-.signature {
-  margin-top: 80px;
-  display: flex;
-  justify-content: space-between;
-}
-
-.sign-box {
-  width: 42%;
-  text-align: center;
-  font-size: 24px !important;
-}
-
-.sign-line {
-  margin-top: 60px;
-  border-top: 1px solid #000;
 }
 </style>
 </head>
