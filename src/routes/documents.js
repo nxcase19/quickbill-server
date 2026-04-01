@@ -301,6 +301,112 @@ html, body, * {
 [style] {
   font-size: 24px !important;
 }
+
+/* HEADER BALANCE */
+.company-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.company-left {
+  display: flex;
+  gap: 12px;
+}
+
+.company-text {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.doc-title {
+  text-align: right;
+  font-size: 30px;
+  font-weight: bold;
+}
+
+.doc-meta,
+.meta {
+  text-align: right;
+  font-size: 22px;
+}
+
+/* CUSTOMER BOX (ลดความอ้วน) */
+.customer-box,
+.box {
+  background: #f5f6f8;
+  padding: 12px 14px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  font-size: 24px;
+}
+
+/* TABLE (เพิ่มความแน่น) */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  font-size: 24px;
+}
+
+th {
+  background: #eef0f2;
+}
+
+/* ALIGN ACCOUNTING STYLE */
+td:nth-child(3),
+td:nth-child(4),
+td:nth-child(5) {
+  text-align: right;
+}
+
+th:nth-child(3),
+th:nth-child(4),
+th:nth-child(5) {
+  text-align: right;
+}
+
+/* SUMMARY (professional) */
+.summary {
+  width: 300px;
+  margin-left: auto;
+  margin-top: 8px;
+  font-size: 24px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.summary-total,
+.total-final {
+  font-weight: bold;
+  font-size: 26px;
+}
+
+/* SIGNATURE (ยกขึ้นมา) */
+.signature {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 40px;
+}
+
+.signature-line,
+.sign-line {
+  width: 40%;
+  text-align: center;
+  font-size: 22px;
+  margin-top: 40px;
+  border-top: 1px solid #000;
+}
 </style>
 </head>
 
