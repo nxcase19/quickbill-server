@@ -302,8 +302,21 @@ html, body, div, span, p, table, td, th, strong, b, small {
 
 body {
   font-size: 24px !important;
-  line-height: 1.7;
+  line-height: 1.3;
   padding: 40px;
+}
+
+/* tighter line-height for text blocks */
+p, div, span {
+  line-height: 1.3 !important;
+}
+
+td, th {
+  line-height: 1.2 !important;
+}
+
+.company, .meta {
+  line-height: 1.3 !important;
 }
 
 /* header overrides */
