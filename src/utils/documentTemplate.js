@@ -349,6 +349,12 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
     }`
       : ''}
 
+    ${fontDataUrl
+      ? `* {
+      font-family: 'THSarabun', sans-serif !important;
+    }`
+      : ''}
+
     body {
       font-family: ${fontDataUrl
         ? "'THSarabun', sans-serif"
