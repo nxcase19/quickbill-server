@@ -293,6 +293,7 @@ router.get('/:id/pdf', async (req, res) => {
 * {
   font-family: 'THSarabun' !important;
   box-sizing: border-box;
+  font-size: 24px !important;
 }
 
 body {
@@ -304,16 +305,16 @@ body {
 
 /* HEADER */
 .company {
-  font-size: 26px;
+  font-size: 26px !important;
 }
 
 .doc-title {
-  font-size: 36px;
+  font-size: 36px !important;
   font-weight: bold;
 }
 
 .meta {
-  font-size: 22px;
+  font-size: 24px !important;
 }
 
 /* SECTION */
@@ -327,7 +328,7 @@ body {
   padding: 18px;
   border-radius: 10px;
   margin-top: 12px;
-  font-size: 24px;
+  font-size: 24px !important;
 }
 
 /* TABLE */
@@ -335,20 +336,19 @@ table {
   width: 100%;
   border-collapse: collapse;
   margin-top: 30px;
-  font-size: 24px;
 }
 
 th {
   background: #f1f3f5;
   padding: 14px;
-  font-size: 26px;
+  font-size: 26px !important;
   font-weight: bold;
 }
 
 td {
   padding: 14px;
   border-bottom: 1px solid #ddd;
-  font-size: 24px;
+  font-size: 24px !important;
 }
 
 /* TOTAL BOX */
@@ -359,7 +359,7 @@ td {
   background: #f5f6f8;
   padding: 18px;
   border-radius: 10px;
-  font-size: 24px;
+  font-size: 24px !important;
 }
 
 .total-row {
@@ -369,7 +369,7 @@ td {
 }
 
 .total-final {
-  font-size: 28px;
+  font-size: 28px !important;
   font-weight: bold;
 }
 
@@ -383,7 +383,7 @@ td {
 .sign-box {
   width: 42%;
   text-align: center;
-  font-size: 22px;
+  font-size: 24px !important;
 }
 
 .sign-line {
