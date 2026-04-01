@@ -298,7 +298,25 @@ router.get('/:id/pdf', async (req, res) => {
 
 body {
   font-family: 'THSarabun' !important;
-  font-size: 16px;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+h1, h2, h3 {
+  font-size: 28px;
+}
+
+table {
+  font-size: 20px;
+}
+
+th {
+  font-size: 22px;
+  font-weight: bold;
+}
+
+td {
+  font-size: 20px;
 }
 </style>
 </head>
