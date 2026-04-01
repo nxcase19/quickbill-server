@@ -288,35 +288,113 @@ router.get('/:id/pdf', async (req, res) => {
 @font-face {
   font-family: 'THSarabun';
   src: url('data:font/truetype;charset=utf-8;base64,${fontBase64}') format('truetype');
-  font-weight: normal;
-  font-style: normal;
 }
 
 * {
   font-family: 'THSarabun' !important;
+  box-sizing: border-box;
 }
 
 body {
-  font-family: 'THSarabun' !important;
   font-size: 20px;
-  line-height: 1.4;
+  line-height: 1.6;
+  color: #111;
+  padding: 40px;
 }
 
-h1, h2, h3 {
-  font-size: 28px;
+/* HEADER */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 30px;
 }
 
+.company {
+  font-size: 22px;
+  line-height: 1.5;
+}
+
+.doc-title {
+  font-size: 32px;
+  font-weight: bold;
+}
+
+.meta {
+  font-size: 20px;
+  margin-top: 5px;
+}
+
+/* SECTION */
+.section {
+  margin-top: 25px;
+}
+
+/* BOX */
+.box {
+  background: #f5f6f8;
+  padding: 15px;
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+/* TABLE */
 table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 25px;
   font-size: 20px;
 }
 
 th {
+  background: #f1f3f5;
+  padding: 12px;
+  text-align: left;
   font-size: 22px;
   font-weight: bold;
 }
 
 td {
-  font-size: 20px;
+  padding: 12px;
+  border-bottom: 1px solid #ddd;
+}
+
+/* TOTAL BOX */
+.total-box {
+  margin-top: 25px;
+  margin-left: auto;
+  width: 300px;
+  background: #f5f6f8;
+  padding: 15px;
+  border-radius: 8px;
+}
+
+.total-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.total-final {
+  font-size: 24px;
+  font-weight: bold;
+}
+
+/* SIGNATURE */
+.signature {
+  margin-top: 60px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.sign-box {
+  width: 40%;
+  text-align: center;
+}
+
+.sign-line {
+  margin-top: 50px;
+  border-top: 1px solid #000;
 }
 </style>
 </head>
