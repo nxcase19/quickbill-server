@@ -387,12 +387,19 @@ th:nth-child(5) {
 .total-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 4px;
+}
+
+.total-row span:last-child {
+  text-align: right;
+  min-width: 100px;
 }
 
 .total-final {
   font-size: 28px;
   font-weight: bold;
+  text-align: right;
 }
 
 /* SIGNATURE */
