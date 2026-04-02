@@ -8,7 +8,7 @@ import { supabase } from '../utils/supabase.js'
 
 const router = Router()
 
-const STORAGE_BUCKET = 'quickbill'
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'uploads'
 
 function safeOriginalName(name, fallback) {
   const safe = String(name || fallback)
