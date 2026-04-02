@@ -477,11 +477,53 @@ export async function handleStripeWebhook(req, res) {
         result_row_count: result.rowCount,
       })
 
-      let finalAccountId = accountId
-      let updatedRows = result.rowCount
-
+      let fallbackBySubRowCount = 0
       if (result.rowCount === 0) {
-        console.warn('[stripe] checkout.session.completed: primary UPDATE rowCount=0, trying fallback by subscription_id', {
+        console.warn('[stripe] primary update failed, try fallback by subscription_id')
+        const fallback = await pool.query(
+          `UPDATE accounts
+           SET
+             plan_type = $1::text,
+             subscription_id = $2::text,
+             subscription_ends_at = $3::timestamptz,
+             trial_ends_at = NOW(),
+             cancel_at_period_end = false
+           WHERE subscription_id = $2::text`,
+          [planType, subscriptionIdStr, currentPeriodEnd],
+        )
+        fallbackBySubRowCount = fallback.rowCount
+        console.log('[stripe] fallback update result', {
+          updated_rows: fallback.rowCount,
+        })
+      }
+
+      console.log('[stripe] FINAL UPDATE RESULT', {
+        account_id: accountId,
+        subscription_id: subscriptionIdStr,
+        plan_type: planType,
+        primary_updated: result.rowCount,
+      })
+
+      let finalAccountId = accountId
+      let updatedRows = result.rowCount > 0 ? result.rowCount : fallbackBySubRowCount
+      if (result.rowCount === 0 && fallbackBySubRowCount > 0) {
+        try {
+          const { rows: idRows } = await pool.query(
+            `SELECT id::text AS id
+             FROM accounts
+             WHERE subscription_id = $1::text
+             LIMIT 1`,
+            [subscriptionIdStr],
+          )
+          const resolved = normalizeString(idRows[0]?.id)
+          if (resolved) finalAccountId = resolved
+        } catch {
+          /* keep accountId */
+        }
+      }
+
+      if (result.rowCount === 0 && fallbackBySubRowCount === 0) {
+        console.warn('[stripe] checkout.session.completed: primary and subscription_id UPDATE rowCount=0, trying legacy SELECT + UPDATE by id', {
           session_id: sessionId,
           attempted_account_id: accountId,
           subscription_id: subscriptionIdStr,
