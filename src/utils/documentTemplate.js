@@ -147,15 +147,7 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
 
   const addr = escapeHtml(companySafe?.address ?? '')
   const companyPhoneRaw = String(companySafe?.phone ?? '').trim()
-  const companyPhoneLine =
-    companyPhoneRaw !== ''
-      ? `<div>${escapeHtml(phoneLabel)} ${escapeHtml(companyPhoneRaw)}</div>`
-      : ''
   const taxIdRaw = String(companySafe?.tax_id ?? '').trim()
-  const companyTaxLine =
-    taxIdRaw !== ''
-      ? `<div>${escapeHtml(taxLabel)} ${escapeHtml(taxIdRaw)}</div>`
-      : ''
 
   const items = Array.isArray(data.items) ? data.items : []
   const isDn = type === 'dn'
@@ -367,44 +359,6 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
       print-color-adjust: exact;
     }
 
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 24px;
-    }
-
-    .company {
-      display: flex;
-      gap: 14px;
-      align-items: center;
-    }
-
-    .logo {
-      width: 70px;
-      height: 70px;
-      object-fit: contain;
-    }
-
-    .company-info {
-      line-height: 1.5;
-    }
-
-    .title {
-      text-align: right;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: 26px;
-      font-weight: 700;
-    }
-
-    .meta {
-      margin-top: 6px;
-      font-size: 14px;
-    }
-
     hr {
       border: none;
       border-top: 1px solid #e2e8f0;
@@ -467,21 +421,45 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="company">
-      ${logoFull ? `<img src="${escapeAttrUrl(logoFull)}" class="logo" alt="" />` : ''}
-      <div class="company-info">
-        <div style="font-weight:600">${companyName}</div>
-        <div>${addr}</div>
-        ${companyPhoneLine}
-        ${companyTaxLine}
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
+    <div style="display:flex; gap:12px; align-items:flex-start;">
+      ${
+        logoFull
+          ? `<img src="${escapeAttrUrl(logoFull)}" style="width:60px; height:60px; object-fit:contain;" alt="" />`
+          : ''
+      }
+      <div style="display:flex; flex-direction:column; line-height:1.4;">
+        <div style="font-weight:bold; font-size:16px;">
+          ${companyName}
+        </div>
+        <div style="font-size:13px;">
+          ${addr}
+        </div>
+        ${
+          companyPhoneRaw !== ''
+            ? `<div style="font-size:13px;">
+          ${escapeHtml(phoneLabel)} ${escapeHtml(companyPhoneRaw)}
+        </div>`
+            : ''
+        }
+        ${
+          taxIdRaw !== ''
+            ? `<div style="font-size:13px;">
+          ${escapeHtml(taxLabel)} ${escapeHtml(taxIdRaw)}
+        </div>`
+            : ''
+        }
       </div>
     </div>
-    <div class="title">
-      <h1>${escapeHtml(title)}</h1>
-      <div class="meta">
-        <div>${escapeHtml(labels.docNo)}: ${docNo}</div>
-        <div>${escapeHtml(labels.date)}: ${dateStr}</div>
+    <div style="text-align:right; line-height:1.6;">
+      <div style="font-weight:bold; font-size:18px;">
+        ${escapeHtml(title)}
+      </div>
+      <div style="font-size:13px;">
+        ${escapeHtml(labels.docNo)}: ${docNo}
+      </div>
+      <div style="font-size:13px;">
+        ${escapeHtml(labels.date)}: ${dateStr}
       </div>
     </div>
   </div>
