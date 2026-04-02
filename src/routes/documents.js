@@ -55,6 +55,46 @@ function normalizeDocumentItemsForPdf(raw) {
   })
 }
 
+/** PDF only: ?token= JWT (LINE / no Bearer) or req.user from authMiddleware. */
+function authenticateDocumentPdf(req, res, next) {
+  try {
+    const qToken = req.query?.token
+    if (qToken != null && String(qToken).trim() !== '') {
+      const decoded = jwt.verify(
+        String(qToken).trim(),
+        process.env.JWT_SECRET || jwtSecret,
+      )
+      const raw =
+        decoded.account_id ??
+        decoded.accountId ??
+        decoded.id ??
+        decoded.userId ??
+        null
+      const accountId =
+        raw != null && raw !== ''
+          ? typeof raw === 'string'
+            ? raw.trim()
+            : String(raw)
+          : null
+      if (!accountId) {
+        return res.status(401).json({ error: 'Invalid token' })
+      }
+      req.account_id = accountId
+      return next()
+    }
+
+    const fromUser = req.user?.account_id ?? req.user?.accountId
+    if (!fromUser) {
+      return res.status(401).json({ error: 'Missing token' })
+    }
+    req.account_id =
+      typeof fromUser === 'string' ? fromUser.trim() : String(fromUser)
+    return next()
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' })
+  }
+}
+
 router.get('/', async (req, res) => {
   try {
     const accountId = getAccountId(req)
@@ -153,37 +193,12 @@ router.get('/usage/today', async (req, res) => {
   }
 })
 
-router.get('/:id/pdf', async (req, res) => {
+router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
   let accountId
-  const qToken = req.query?.token
-  if (qToken != null && String(qToken).trim() !== '') {
-    try {
-      const decoded = jwt.verify(String(qToken).trim(), jwtSecret)
-      const raw =
-        decoded.account_id ??
-        decoded.accountId ??
-        decoded.id ??
-        decoded.userId ??
-        null
-      accountId =
-        raw != null && raw !== ''
-          ? typeof raw === 'string'
-            ? raw.trim()
-            : String(raw)
-          : null
-    } catch {
-      return res.status(401).json({ error: 'Unauthorized' })
-    }
-    if (!accountId) {
-      return res.status(401).json({ error: 'Unauthorized' })
-    }
-    req.account_id = accountId
-  } else {
-    try {
-      accountId = requireAccountId(req)
-    } catch {
-      return res.status(401).json({ error: 'Unauthorized' })
-    }
+  try {
+    accountId = requireAccountId(req)
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' })
   }
 
   try {
