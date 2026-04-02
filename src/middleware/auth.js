@@ -50,6 +50,20 @@ export async function authMiddleware(req, res, next) {
       return next()
     }
 
+    // GET /api/documents/:id/pdf?token=… — JWT verified in route (LINE in-app browser has no Bearer header)
+    const rawQ = req.query?.token
+    const tokenFromQuery =
+      rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : ''
+    if (!hasBearer && tokenFromQuery) {
+      const isDocumentsPdf =
+        req.method === 'GET' &&
+        typeof req.path === 'string' &&
+        /\/pdf\/?$/i.test(req.path)
+      if (isDocumentsPdf) {
+        return next()
+      }
+    }
+
     if (!hasBearer) {
       return res.status(401).json({
         success: false,

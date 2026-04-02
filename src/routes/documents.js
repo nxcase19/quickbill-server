@@ -1,5 +1,7 @@
 import { Router } from 'express'
+import jwt from 'jsonwebtoken'
 import puppeteer from 'puppeteer'
+import { jwtSecret } from '../config.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pool } from '../db.js'
@@ -153,10 +155,35 @@ router.get('/usage/today', async (req, res) => {
 
 router.get('/:id/pdf', async (req, res) => {
   let accountId
-  try {
-    accountId = requireAccountId(req)
-  } catch {
-    return res.status(401).json({ error: 'Unauthorized' })
+  const qToken = req.query?.token
+  if (qToken != null && String(qToken).trim() !== '') {
+    try {
+      const decoded = jwt.verify(String(qToken).trim(), jwtSecret)
+      const raw =
+        decoded.account_id ??
+        decoded.accountId ??
+        decoded.id ??
+        decoded.userId ??
+        null
+      accountId =
+        raw != null && raw !== ''
+          ? typeof raw === 'string'
+            ? raw.trim()
+            : String(raw)
+          : null
+    } catch {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+    if (!accountId) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+    req.account_id = accountId
+  } else {
+    try {
+      accountId = requireAccountId(req)
+    } catch {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
   }
 
   try {
