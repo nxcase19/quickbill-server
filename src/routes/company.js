@@ -1,28 +1,48 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import { Router } from 'express'
 import { pool } from '../db.js'
 import { getAccountId } from '../utils/tenant.js'
 import { uploadLogo, uploadSignature } from '../middleware/upload.js'
 import { safeQuery } from '../utils/tenantQuery.js'
 import { fetchCompanyRow } from '../utils/companySettings.js'
+import { supabase } from '../utils/supabase.js'
 
 const router = Router()
 
-function unlinkLogoFile(logoUrl) {
-  if (!logoUrl || typeof logoUrl !== 'string') return
-  const rel = logoUrl.replace(/^\/+/, '')
-  if (!rel.startsWith('uploads/logos/')) return
-  const abs = path.join(process.cwd(), rel)
-  fs.unlink(abs, () => {})
+const STORAGE_BUCKET = 'quickbill'
+
+function safeOriginalName(name, fallback) {
+  const safe = String(name || fallback)
+    .replace(/[/\\]/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+  return safe || fallback
 }
 
-function unlinkSignatureFile(signatureUrl) {
-  if (!signatureUrl || typeof signatureUrl !== 'string') return
-  const rel = signatureUrl.replace(/^\/+/, '')
-  if (!rel.startsWith('uploads/signatures/')) return
-  const abs = path.join(process.cwd(), rel)
-  fs.unlink(abs, () => {})
+function companyStoragePublicUrl(fileName) {
+  const base = String(process.env.SUPABASE_URL || '').replace(/\/$/, '')
+  return `${base}/storage/v1/object/public/${STORAGE_BUCKET}/${fileName}`
+}
+
+async function uploadToCompanyBucket(buffer, file, fallbackName) {
+  const safe = safeOriginalName(file.originalname, fallbackName)
+  const fileName = `company/${Date.now()}-${safe}`
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).upload(fileName, buffer, {
+    contentType: file.mimetype || 'application/octet-stream',
+  })
+  if (error) throw error
+  const publicUrl = companyStoragePublicUrl(fileName)
+  return { fileName, publicUrl }
+}
+
+/** Remove previous object when URL is our public Supabase URL (ignores legacy /uploads paths). */
+async function removeBucketObjectByPublicUrl(storedUrl) {
+  if (!storedUrl || typeof storedUrl !== 'string') return
+  const base = String(process.env.SUPABASE_URL || '').replace(/\/$/, '')
+  const prefix = `${base}/storage/v1/object/public/${STORAGE_BUCKET}/`
+  if (!storedUrl.startsWith(prefix)) return
+  const objectPath = storedUrl.slice(prefix.length)
+  if (!objectPath) return
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([objectPath])
+  if (error) console.warn('[company] Supabase remove:', error.message)
 }
 
 function handleLogoUpload(req, res, next) {
@@ -236,57 +256,75 @@ router.post('/logo', handleLogoUpload, async (req, res) => {
   if (!accountId) {
     return res.status(401).json({ error: 'Missing account_id in token' })
   }
-  if (!req.file) {
+  if (!req.file?.buffer) {
     return res.status(400).json({ error: 'No file uploaded' })
   }
 
-  const relUrl = `/uploads/logos/${req.file.filename}`
-
-  const client = await pool.connect()
+  let newObjectPath = null
   try {
-    await client.query('BEGIN')
-
-    const { rows: existing } = await safeQuery(
-      client,
-      `SELECT id, logo_url FROM company_settings WHERE account_id = $1::uuid LIMIT 1`,
-      [accountId],
+    const { fileName, publicUrl } = await uploadToCompanyBucket(
+      req.file.buffer,
+      req.file,
+      'logo',
     )
+    newObjectPath = fileName
 
-    if (existing.length > 0 && existing[0].logo_url) {
-      unlinkLogoFile(existing[0].logo_url)
-    }
-
-    if (existing.length > 0) {
-      await safeQuery(
-        client,
-        `UPDATE company_settings
-         SET logo_url = $2,
-             updated_at = NOW()
-         WHERE account_id = $1::uuid`,
-        [accountId, relUrl],
-      )
-    } else {
-      await safeQuery(
-        client,
-        `INSERT INTO company_settings (account_id, logo_url, language, date_format)
-         VALUES ($1::uuid, $2, 'th', 'thai')`,
-        [accountId, relUrl],
-      )
-    }
-
-    await client.query('COMMIT')
-    res.json({ logo_url: relUrl })
-  } catch (err) {
+    const client = await pool.connect()
     try {
-      await client.query('ROLLBACK')
-    } catch {
-      /* ignore */
+      await client.query('BEGIN')
+
+      const { rows: existing } = await safeQuery(
+        client,
+        `SELECT id, logo_url FROM company_settings WHERE account_id = $1::uuid LIMIT 1`,
+        [accountId],
+      )
+
+      const oldUrl =
+        existing.length > 0 && existing[0].logo_url
+          ? String(existing[0].logo_url).trim()
+          : ''
+
+      if (existing.length > 0) {
+        await safeQuery(
+          client,
+          `UPDATE company_settings
+           SET logo_url = $2,
+               updated_at = NOW()
+           WHERE account_id = $1::uuid`,
+          [accountId, publicUrl],
+        )
+      } else {
+        await safeQuery(
+          client,
+          `INSERT INTO company_settings (account_id, logo_url, language, date_format)
+           VALUES ($1::uuid, $2, 'th', 'thai')`,
+          [accountId, publicUrl],
+        )
+      }
+
+      await client.query('COMMIT')
+      await removeBucketObjectByPublicUrl(oldUrl)
+      res.json({ logo_url: publicUrl })
+    } catch (dbErr) {
+      try {
+        await client.query('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw dbErr
+    } finally {
+      client.release()
     }
-    unlinkLogoFile(relUrl)
+  } catch (err) {
+    if (newObjectPath) {
+      try {
+        await supabase.storage.from(STORAGE_BUCKET).remove([newObjectPath])
+      } catch {
+        /* ignore */
+      }
+    }
     console.error('POST /company/logo error:', err)
     res.status(500).json({ error: err.message })
-  } finally {
-    client.release()
   }
 })
 
@@ -295,57 +333,75 @@ router.post('/signature', handleSignatureUpload, async (req, res) => {
   if (!accountId) {
     return res.status(401).json({ error: 'Missing account_id in token' })
   }
-  if (!req.file) {
+  if (!req.file?.buffer) {
     return res.status(400).json({ error: 'No file uploaded' })
   }
 
-  const relUrl = `/uploads/signatures/${req.file.filename}`
-
-  const client = await pool.connect()
+  let newObjectPath = null
   try {
-    await client.query('BEGIN')
-
-    const { rows: existing } = await safeQuery(
-      client,
-      `SELECT id, signature_url FROM company_settings WHERE account_id = $1::uuid LIMIT 1`,
-      [accountId],
+    const { fileName, publicUrl } = await uploadToCompanyBucket(
+      req.file.buffer,
+      req.file,
+      'signature',
     )
+    newObjectPath = fileName
 
-    if (existing.length > 0 && existing[0].signature_url) {
-      unlinkSignatureFile(existing[0].signature_url)
-    }
-
-    if (existing.length > 0) {
-      await safeQuery(
-        client,
-        `UPDATE company_settings
-         SET signature_url = $2,
-             updated_at = NOW()
-         WHERE account_id = $1::uuid`,
-        [accountId, relUrl],
-      )
-    } else {
-      await safeQuery(
-        client,
-        `INSERT INTO company_settings (account_id, signature_url, language, date_format)
-         VALUES ($1::uuid, $2, 'th', 'thai')`,
-        [accountId, relUrl],
-      )
-    }
-
-    await client.query('COMMIT')
-    res.json({ signature_url: relUrl })
-  } catch (err) {
+    const client = await pool.connect()
     try {
-      await client.query('ROLLBACK')
-    } catch {
-      /* ignore */
+      await client.query('BEGIN')
+
+      const { rows: existing } = await safeQuery(
+        client,
+        `SELECT id, signature_url FROM company_settings WHERE account_id = $1::uuid LIMIT 1`,
+        [accountId],
+      )
+
+      const oldUrl =
+        existing.length > 0 && existing[0].signature_url
+          ? String(existing[0].signature_url).trim()
+          : ''
+
+      if (existing.length > 0) {
+        await safeQuery(
+          client,
+          `UPDATE company_settings
+           SET signature_url = $2,
+               updated_at = NOW()
+           WHERE account_id = $1::uuid`,
+          [accountId, publicUrl],
+        )
+      } else {
+        await safeQuery(
+          client,
+          `INSERT INTO company_settings (account_id, signature_url, language, date_format)
+           VALUES ($1::uuid, $2, 'th', 'thai')`,
+          [accountId, publicUrl],
+        )
+      }
+
+      await client.query('COMMIT')
+      await removeBucketObjectByPublicUrl(oldUrl)
+      res.json({ signature_url: publicUrl })
+    } catch (dbErr) {
+      try {
+        await client.query('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw dbErr
+    } finally {
+      client.release()
     }
-    unlinkSignatureFile(relUrl)
+  } catch (err) {
+    if (newObjectPath) {
+      try {
+        await supabase.storage.from(STORAGE_BUCKET).remove([newObjectPath])
+      } catch {
+        /* ignore */
+      }
+    }
     console.error('POST /company/signature error:', err)
     res.status(500).json({ error: err.message })
-  } finally {
-    client.release()
   }
 })
 
