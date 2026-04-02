@@ -371,12 +371,23 @@ export async function handleStripeWebhook(req, res) {
   try {
     if (event.type === 'checkout.session.completed') {
       const session = /** @type {import('stripe').Stripe.Checkout.Session} */ (event.data.object)
-      console.log('[stripe] checkout.session.completed metadata:', session.metadata)
+      const sessionId = session.id != null ? String(session.id) : null
+
+      console.log('[stripe] webhook checkout.session.completed received', {
+        session_id: sessionId,
+      })
 
       const accountId =
-        normalizeString(session.metadata?.account_id) || normalizeString(session.client_reference_id)
+        normalizeString(session.metadata?.account_id) ||
+        normalizeString(session.client_reference_id) ||
+        null
+
       if (!accountId) {
-        console.warn('[stripe] checkout.session.completed: missing account_id')
+        console.warn('[stripe] checkout.session.completed: missing account_id (no metadata.account_id or client_reference_id)', {
+          session_id: sessionId,
+          session_metadata: session.metadata ?? null,
+          session_client_reference_id: session.client_reference_id ?? null,
+        })
         return res.status(200).json({ received: true })
       }
 
@@ -389,13 +400,13 @@ export async function handleStripeWebhook(req, res) {
             : ''
       const subscriptionIdStr = normalizeString(subscriptionId)
 
-      console.log('[stripe] checkout.session.completed', {
-        account_id: accountId,
-        subscription_id: subscriptionIdStr || null,
-      })
-
       if (!subscriptionIdStr) {
-        console.warn('[stripe] checkout.session.completed: missing subscription_id')
+        console.warn('[stripe] checkout.session.completed: missing subscription_id', {
+          session_id: sessionId,
+          account_id: accountId,
+          session_metadata: session.metadata ?? null,
+          session_client_reference_id: session.client_reference_id ?? null,
+        })
         return res.status(200).json({ received: true })
       }
 
@@ -411,42 +422,115 @@ export async function handleStripeWebhook(req, res) {
       if (priceId && envPro && priceId === envPro) planType = 'pro'
       if (priceId && envBusiness && priceId === envBusiness) planType = 'business'
 
-      console.log('[stripe] checkout.session.completed price', {
-        account_id: accountId,
+      const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
+
+      console.log('[stripe] checkout.session.completed detail', {
+        session_id: sessionId,
+        session_metadata: session.metadata ?? null,
+        session_client_reference_id: session.client_reference_id ?? null,
         subscription_id: subscriptionIdStr,
         price_id: priceId || null,
         mapped_plan_type: planType || null,
+        current_period_end: currentPeriodEnd.toISOString(),
       })
 
       if (!planType) {
         console.warn('[stripe] checkout.session.completed: unknown price id', {
+          session_id: sessionId,
           account_id: accountId,
           subscription_id: subscriptionIdStr,
           price_id: priceId || null,
         })
+        console.log('[stripe] checkout.session.completed FINAL', {
+          session_id: sessionId,
+          account_id: accountId,
+          subscription_id: subscriptionIdStr,
+          plan_type: null,
+          updated_rows: 0,
+        })
         return res.status(200).json({ received: true })
       }
 
-      const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
-
-      const result = await pool.query(
-        `UPDATE accounts
+      const updateCheckoutAccountSql = `UPDATE accounts
          SET
            plan_type = $1::text,
            subscription_id = $2::text,
            subscription_ends_at = $3::timestamptz,
            trial_ends_at = NOW(),
            cancel_at_period_end = false
-         WHERE id::text = $4`,
-        [planType, subscriptionIdStr, currentPeriodEnd, accountId],
-      )
+         WHERE id::text = $4`
 
-      console.log('[stripe] checkout.session.completed: db updated', {
+      const result = await pool.query(updateCheckoutAccountSql, [
+        planType,
+        subscriptionIdStr,
+        currentPeriodEnd,
+        accountId,
+      ])
+
+      console.log('[stripe] checkout.session.completed UPDATE primary', {
+        session_id: sessionId,
         account_id: accountId,
         subscription_id: subscriptionIdStr,
+        price_id: priceId || null,
+        mapped_plan_type: planType,
+        current_period_end: currentPeriodEnd.toISOString(),
+        result_row_count: result.rowCount,
+      })
+
+      let finalAccountId = accountId
+      let updatedRows = result.rowCount
+
+      if (result.rowCount === 0) {
+        console.warn('[stripe] checkout.session.completed: primary UPDATE rowCount=0, trying fallback by subscription_id', {
+          session_id: sessionId,
+          attempted_account_id: accountId,
+          subscription_id: subscriptionIdStr,
+        })
+        try {
+          const { rows: bySub } = await pool.query(
+            `SELECT id::text AS id
+             FROM accounts
+             WHERE subscription_id = $1::text
+             LIMIT 1`,
+            [subscriptionIdStr],
+          )
+          const altId = normalizeString(bySub[0]?.id)
+          if (altId) {
+            const resultFb = await pool.query(updateCheckoutAccountSql, [
+              planType,
+              subscriptionIdStr,
+              currentPeriodEnd,
+              altId,
+            ])
+            updatedRows = resultFb.rowCount
+            finalAccountId = altId
+            console.log('[stripe] checkout.session.completed fallback by subscription_id', {
+              session_id: sessionId,
+              ok: resultFb.rowCount > 0,
+              account_id: altId,
+              updated_rows: resultFb.rowCount,
+            })
+          } else {
+            console.warn('[stripe] checkout.session.completed: fallback by subscription_id found no row', {
+              session_id: sessionId,
+              subscription_id: subscriptionIdStr,
+            })
+          }
+        } catch (fbErr) {
+          console.warn('[stripe] checkout.session.completed: fallback by subscription_id failed', {
+            session_id: sessionId,
+            subscription_id: subscriptionIdStr,
+            message: fbErr instanceof Error ? fbErr.message : String(fbErr),
+          })
+        }
+      }
+
+      console.log('[stripe] checkout.session.completed FINAL', {
+        session_id: sessionId,
+        account_id: finalAccountId,
+        subscription_id: subscriptionIdStr,
         plan_type: planType,
-        computed_current_period_end: currentPeriodEnd.toISOString(),
-        updated_rows: result.rowCount,
+        updated_rows: updatedRows,
       })
 
       return res.status(200).json({ received: true })
