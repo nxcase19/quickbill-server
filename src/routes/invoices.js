@@ -1,6 +1,8 @@
 import { Router } from 'express'
+import jwt from 'jsonwebtoken'
 import puppeteer from 'puppeteer'
 import { pool } from '../db.js'
+import { jwtSecret } from '../config.js'
 import { buildTenantWhereClause } from '../utils/tenant.js'
 import { logTenantAccess } from '../utils/tenantDebug.js'
 import {
@@ -73,12 +75,46 @@ router.get('/', async (req, res) => {
 })
 
 router.get('/:id/pdf', async (req, res) => {
-  let accountId
-  try {
-    accountId = requireAccountId(req)
-  } catch {
-    return res.status(401).json({ error: 'Unauthorized' })
+  const rawToken =
+    req.query.token ||
+    (req.headers.authorization && req.headers.authorization.split(' ')[1])
+
+  console.log('🔥 SALES PDF TOKEN:', rawToken)
+
+  if (!rawToken) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized: Missing token',
+    })
   }
+
+  let payload
+  try {
+    payload = jwt.verify(rawToken, jwtSecret)
+  } catch {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized: Invalid token',
+    })
+  }
+
+  const accountId =
+    payload.accountId ||
+    payload.account_id ||
+    payload.id ||
+    payload.userId ||
+    null
+
+  console.log('🔥 SALES ACCOUNT ID:', accountId)
+
+  if (!accountId) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized: Invalid token payload',
+    })
+  }
+
+  const accountIdStr = String(accountId)
 
   const client = await pool.connect()
   try {
@@ -95,7 +131,7 @@ router.get('/:id/pdf', async (req, res) => {
       `SELECT inv.*
        FROM invoices inv
        WHERE inv.id = $1 AND inv.account_id = $2`,
-      [id, accountId],
+      [id, accountIdStr],
     )
 
     if (!rows.length) {
@@ -109,7 +145,7 @@ router.get('/:id/pdf', async (req, res) => {
       [inv.id],
     )
 
-    const fallbackCompany = await getCompany(pool, accountId)
+    const fallbackCompany = await getCompany(pool, accountIdStr)
     const doc = inv
     const company = buildCompanyForPdf(doc, fallbackCompany)
     applyPdfLogoBaseUrl(company)
@@ -118,7 +154,7 @@ router.get('/:id/pdf', async (req, res) => {
     const effectiveLang = pdfLangOverride ?? 'th'
     const showVatLine = inv.vat_type === 'vat7'
 
-    const watermarkText = await getPdfWatermarkText(pool, accountId)
+    const watermarkText = await getPdfWatermarkText(pool, accountIdStr)
 
     const html = renderDocument({
       type: 'invoice',
