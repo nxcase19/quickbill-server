@@ -6,6 +6,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { formatDate } from './formatDate.js'
 import { resolvePdfLogoAbsoluteUrl } from './pdfLogoUrl.js'
+import { pdfIsFreePlan } from './pdfGenerator.js'
 
 function escapeHtml(v) {
   return String(v ?? '')
@@ -37,6 +38,7 @@ function formatMoneyPdf(n, locale) {
  */
 export function renderDocument({ type, data, company, lang = 'th', watermarkText = '' }) {
   const companySafeRaw = company || {}
+  const isFree = pdfIsFreePlan(companySafeRaw)
 
   const companySafe = {
     name_th:
