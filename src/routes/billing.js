@@ -204,6 +204,43 @@ router.get('/info', async (req, res) => {
   }
 })
 
+router.get('/trial-status', async (req, res) => {
+  try {
+    try {
+      requireAccountId(req)
+    } catch {
+      return res.status(401).json({ success: false, error: 'Unauthorized' })
+    }
+
+    logTenantAccess('GET /api/billing/trial-status', req)
+
+    const trialEnds = req.user?.trial_ends_at ?? null
+    const now = Date.now()
+    let daysLeft = null
+    if (trialEnds) {
+      const end = new Date(trialEnds)
+      if (!Number.isNaN(end.getTime())) {
+        daysLeft = Math.ceil((end.getTime() - now) / (1000 * 60 * 60 * 24))
+      }
+    }
+
+    const plan = String(req.user?.plan || 'free').toLowerCase()
+
+    return res.json({
+      success: true,
+      data: {
+        plan,
+        trialEnds,
+        daysLeft,
+        isTrialActive: req.user?.is_trial_active === true,
+      },
+    })
+  } catch (err) {
+    console.error('GET /billing/trial-status:', err)
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error' })
+  }
+})
+
 router.post('/create-checkout-session', async (req, res) => {
   try {
     let accountId
