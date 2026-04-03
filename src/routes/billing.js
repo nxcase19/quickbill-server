@@ -18,6 +18,7 @@ import {
   getPriceIdForPlan,
   getStripeClient,
   normalizePaidPlanType,
+  resolvePlanFromPriceAndMetadata,
 } from '../utils/stripeBilling.js'
 
 const router = Router()
@@ -109,6 +110,208 @@ async function downgradeAccountAfterSubscriptionRemoved(db, accountId) {
     console.log('[stripe] already free, skip downgrade', { account_id: accountId })
   }
   return { rowCount: result.rowCount }
+}
+
+function subscriptionStatusScore(status) {
+  const s = String(status || '').toLowerCase()
+  if (s === 'active') return 3
+  if (s === 'trialing') return 2
+  if (s === 'past_due') return 1
+  return 0
+}
+
+/**
+ * @param {import('stripe').Stripe.Subscription[]} subs
+ * @returns {import('stripe').Stripe.Subscription | null}
+ */
+function pickBestStripeSubscription(subs) {
+  const list = subs.filter((s) => subscriptionStatusScore(s.status) > 0)
+  if (!list.length) return null
+  return [...list].sort((a, b) => {
+    const d = subscriptionStatusScore(b.status) - subscriptionStatusScore(a.status)
+    if (d !== 0) return d
+    return (Number(b.current_period_end) || 0) - (Number(a.current_period_end) || 0)
+  })[0]
+}
+
+/**
+ * @param {import('pg').Pool} pool
+ * @param {string} accountId
+ * @param {import('stripe').Stripe.Subscription} subscription
+ * @returns {Promise<{ applied: boolean, downgraded?: boolean, effectivePlan?: string, storedPlan?: string, reason?: string }>}
+ */
+async function applyStripeSubscriptionToAccount(pool, accountId, subscription) {
+  const subscriptionIdStr = normalizeString(subscription.id)
+  const priceId = normalizeString(subscription.items?.data?.[0]?.price?.id)
+  const metaPlan = normalizeString(subscription.metadata?.plan_type)
+  let planType = resolvePlanFromPriceAndMetadata(priceId, metaPlan || undefined)
+  if (!planType) {
+    const envBasic = normalizeString(process.env.STRIPE_PRICE_BASIC)
+    const envPro = normalizeString(process.env.STRIPE_PRICE_PRO)
+    const envBusiness = normalizeString(process.env.STRIPE_PRICE_BUSINESS)
+    if (priceId && envBasic && priceId === envBasic) planType = 'basic'
+    if (priceId && envPro && priceId === envPro) planType = 'pro'
+    if (priceId && envBusiness && priceId === envBusiness) planType = 'business'
+  }
+
+  const status = String(subscription.status || '').toLowerCase()
+  if (status === 'canceled' || status === 'incomplete_expired') {
+    await downgradeAccountAfterSubscriptionRemoved(pool, accountId)
+    const row = await fetchAccountBillingRow(pool, accountId)
+    return {
+      applied: true,
+      downgraded: true,
+      effectivePlan: getEffectivePlan(row),
+      storedPlan: getStoredPlan(row),
+    }
+  }
+
+  if (!planType) {
+    return { applied: false, reason: 'unknown_price' }
+  }
+
+  if (!['active', 'trialing', 'past_due'].includes(status)) {
+    return { applied: false, reason: 'inactive_subscription' }
+  }
+
+  const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
+  const cancelAtEnd = subscription.cancel_at_period_end === true
+
+  await pool.query(
+    `UPDATE accounts
+     SET plan_type = $1::text,
+         subscription_id = $2::text,
+         subscription_ends_at = $3::timestamptz,
+         trial_ends_at = NOW(),
+         cancel_at_period_end = $4
+     WHERE id::text = $5`,
+    [planType, subscriptionIdStr, currentPeriodEnd, cancelAtEnd, accountId],
+  )
+
+  const row = await fetchAccountBillingRow(pool, accountId)
+  return {
+    applied: true,
+    effectivePlan: getEffectivePlan(row),
+    storedPlan: planType,
+  }
+}
+
+/**
+ * Pull subscription state from Stripe and align DB (webhook fallback).
+ * @param {import('pg').Pool} pool
+ * @param {import('stripe').Stripe} stripe
+ * @param {string} accountId
+ * @param {string} [email]
+ */
+async function syncAccountPlanFromStripe(pool, stripe, accountId, email) {
+  const row = await fetchAccountBillingRow(pool, accountId)
+  if (!row) {
+    return { ok: false, error: 'account_not_found' }
+  }
+
+  const existingSubId = normalizeString(row.subscription_id)
+  if (existingSubId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(existingSubId)
+      const metaAid = normalizeString(sub.metadata?.account_id)
+      if (metaAid && metaAid !== accountId) {
+        console.warn('[billing] sync-plan: subscription metadata account_id mismatch', {
+          account_id: accountId,
+          subscription_id: existingSubId,
+        })
+      } else {
+        const r = await applyStripeSubscriptionToAccount(pool, accountId, sub)
+        if (r.applied) {
+          return {
+            ok: true,
+            applied: true,
+            source: 'subscription_id',
+            effectivePlan: r.effectivePlan,
+            storedPlan: r.storedPlan,
+            downgraded: r.downgraded === true,
+          }
+        }
+        if (r.reason === 'inactive_subscription') {
+          const row2 = await fetchAccountBillingRow(pool, accountId)
+          return {
+            ok: true,
+            applied: false,
+            source: 'existing_subscription_inactive',
+            effectivePlan: getEffectivePlan(row2),
+            storedPlan: getStoredPlan(row2),
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[billing] sync-plan: retrieve by subscription_id failed', {
+        account_id: accountId,
+        subscription_id: existingSubId,
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  const emailNorm = normalizeString(email).toLowerCase()
+  if (!emailNorm) {
+    const row2 = await fetchAccountBillingRow(pool, accountId)
+    return {
+      ok: true,
+      applied: false,
+      source: 'no_email',
+      effectivePlan: getEffectivePlan(row2),
+      storedPlan: getStoredPlan(row2),
+    }
+  }
+
+  const customers = await stripe.customers.list({ email: emailNorm, limit: 10 })
+  const candidates = []
+
+  for (const c of customers.data) {
+    const subs = await stripe.subscriptions.list({
+      customer: c.id,
+      status: 'all',
+      limit: 30,
+    })
+    for (const sub of subs.data) {
+      const metaAid = normalizeString(sub.metadata?.account_id)
+      if (metaAid === accountId) {
+        candidates.push(sub)
+      }
+    }
+  }
+
+  const best = pickBestStripeSubscription(candidates)
+  if (!best) {
+    const row2 = await fetchAccountBillingRow(pool, accountId)
+    return {
+      ok: true,
+      applied: false,
+      source: 'no_matching_subscription',
+      effectivePlan: getEffectivePlan(row2),
+      storedPlan: getStoredPlan(row2),
+    }
+  }
+
+  const r = await applyStripeSubscriptionToAccount(pool, accountId, best)
+  if (r.applied) {
+    return {
+      ok: true,
+      applied: true,
+      source: 'stripe_customer_email',
+      effectivePlan: r.effectivePlan,
+      storedPlan: r.storedPlan,
+      downgraded: r.downgraded === true,
+    }
+  }
+
+  const row3 = await fetchAccountBillingRow(pool, accountId)
+  return {
+    ok: true,
+    applied: false,
+    source: r.reason || 'apply_failed',
+    effectivePlan: getEffectivePlan(row3),
+    storedPlan: getStoredPlan(row3),
+  }
 }
 
 /**
@@ -238,6 +441,60 @@ router.get('/trial-status', async (req, res) => {
   } catch (err) {
     console.error('GET /billing/trial-status:', err)
     return res.status(500).json({ success: false, error: err.message || 'Internal server error' })
+  }
+})
+
+router.get('/sync-plan', async (req, res) => {
+  try {
+    let accountId
+    try {
+      accountId = requireAccountId(req)
+    } catch {
+      return res.status(401).json({ success: false, error: 'Unauthorized' })
+    }
+
+    if (req.user?.dev_anonymous) {
+      return res.status(400).json({
+        success: false,
+        error: 'Sync requires a logged-in account (not dev anonymous)',
+      })
+    }
+
+    logTenantAccess('GET /api/billing/sync-plan', req)
+
+    const stripe = getStripeClient()
+    if (!stripe) {
+      return res.status(503).json({
+        success: false,
+        error: 'Billing is not configured (Stripe)',
+      })
+    }
+
+    const email = normalizeString(req.user?.email)
+    const out = await syncAccountPlanFromStripe(pool, stripe, accountId, email)
+
+    if (!out.ok) {
+      return res.status(404).json({
+        success: false,
+        error: out.error === 'account_not_found' ? 'Account not found' : 'Sync failed',
+      })
+    }
+
+    const plan = out.effectivePlan ?? 'free'
+    return res.json({
+      success: true,
+      data: {
+        plan,
+        effectivePlan: plan,
+        storedPlan: out.storedPlan ?? 'free',
+        applied: out.applied === true,
+        source: out.source ?? null,
+        downgraded: out.downgraded === true,
+      },
+    })
+  } catch (err) {
+    console.error('SYNC PLAN ERROR:', err)
+    return res.status(500).json({ success: false, error: 'sync failed' })
   }
 })
 
@@ -612,6 +869,10 @@ export async function handleStripeWebhook(req, res) {
         plan_type: planType,
         updated_rows: updatedRows,
       })
+
+      if (updatedRows > 0) {
+        console.log('[WEBHOOK] plan updated:', finalAccountId)
+      }
 
       return res.status(200).json({ received: true })
     }
