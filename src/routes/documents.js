@@ -19,6 +19,7 @@ import {
   countDocumentsCreatedToday,
   incrementDocumentUsage,
 } from '../utils/usageService.js'
+import { getPlanAccess } from '../utils/planAccess.js'
 
 /** Legacy bigint company_id for INSERT only when the column is NOT NULL; never used as tenant filter. */
 function legacyCompanyIdForInsert(req) {
@@ -35,10 +36,9 @@ function legacyCompanyIdForInsert(req) {
  * @param {string} [plan]
  */
 async function checkDocumentLimit(client, accountId, plan) {
-  const planNorm = String(plan ?? '').toLowerCase()
-  const isFreePlan = planNorm === 'free'
+  const access = getPlanAccess(plan)
 
-  if (!isFreePlan) {
+  if (!access.limitDocuments) {
     return { allowed: true }
   }
 
@@ -63,7 +63,7 @@ async function checkDocumentLimit(client, accountId, plan) {
   const monthCount = parseInt(String(monthRes.rows[0]?.count ?? '0'), 10)
 
   console.log('USAGE PLAN CHECK:', {
-    plan: planNorm,
+    plan: String(plan ?? '').toLowerCase(),
     dailyCount: todayCount,
     monthlyCount: monthCount,
   })
@@ -71,16 +71,16 @@ async function checkDocumentLimit(client, accountId, plan) {
   if (todayCount >= 3) {
     return {
       allowed: false,
-      code: 'FREE_LIMIT_DAILY',
-      message: 'คุณใช้ครบ 3 บิล/วันแล้ว (FREE)',
+      code: 'LIMIT_DAILY',
+      message: 'แพ็กเกจ FREE จำกัด 3 บิล/วัน',
     }
   }
 
   if (monthCount >= 50) {
     return {
       allowed: false,
-      code: 'FREE_LIMIT_MONTHLY',
-      message: 'คุณใช้ครบ 50 บิล/เดือนแล้ว (FREE)',
+      code: 'LIMIT_MONTHLY',
+      message: 'แพ็กเกจ FREE จำกัด 50 บิล/เดือน',
     }
   }
 
@@ -240,9 +240,9 @@ router.get('/usage/today', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
     const plan = String(req.user?.plan || 'free').toLowerCase()
-    const isFreePlan = plan === 'free'
+    const access = getPlanAccess(plan)
     const count = await countDocumentsCreatedToday(pool, accountId)
-    const limit = isFreePlan ? FREE_DAILY_DOC_LIMIT : null
+    const limit = access.limitDocuments ? FREE_DAILY_DOC_LIMIT : null
     return res.json({
       success: true,
       data: { count, limit },
@@ -264,7 +264,7 @@ router.get('/usage', async (req, res) => {
   const client = await pool.connect()
   try {
     const plan = String(req.user?.plan || 'free').toLowerCase()
-    const isFreePlan = plan === 'free'
+    const access = getPlanAccess(plan)
 
     const todayRes = await client.query(
       `SELECT COUNT(DISTINCT group_id) AS count
@@ -290,11 +290,11 @@ router.get('/usage', async (req, res) => {
       plan,
       today: {
         used: todayCount,
-        limit: isFreePlan ? 3 : null,
+        limit: access.limitDocuments ? 3 : null,
       },
       month: {
         used: monthCount,
-        limit: isFreePlan ? 50 : null,
+        limit: access.limitDocuments ? 50 : null,
       },
     })
   } catch (err) {
@@ -672,6 +672,15 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
       ? req.body.doc_types
       : [req.body.doc_type || 'INV']
 
+    const wantsPo = rawDocTypes.some((t) => String(t).trim().toUpperCase() === 'PO')
+    if (wantsPo && !getPlanAccess(String(req.user?.plan || 'free').toLowerCase()).canUsePO) {
+      return res.status(403).json({
+        success: false,
+        error: 'FEATURE_LOCKED',
+        message: 'แพ็กเกจนี้ไม่รองรับใบสั่งซื้อ (PO)',
+      })
+    }
+
     const docTypes = rawDocTypes
       .map((t) => String(t).trim().toUpperCase())
       .filter((t) => t.length > 0)
@@ -688,7 +697,7 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
     }
 
     const plan = String(req.user?.plan || 'free').toLowerCase()
-    const isFreePlan = plan === 'free'
+    const access = getPlanAccess(plan)
 
     const countResult = await safeQuery(
       pool,
@@ -716,12 +725,12 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
       monthlyCount: null,
     })
 
-    if (isFreePlan && todayCount + pendingDocs > FREE_DAILY_DOC_LIMIT) {
+    if (access.limitDocuments && todayCount + pendingDocs > FREE_DAILY_DOC_LIMIT) {
       return res.status(403).json({
         success: false,
-        code: 'FREE_LIMIT_DAILY',
-        error: 'FREE_LIMIT_DAILY',
-        message: 'คุณใช้ครบ 3 บิล/วันแล้ว (FREE)',
+        code: 'LIMIT_DAILY',
+        error: 'LIMIT_DAILY',
+        message: 'แพ็กเกจ FREE จำกัด 3 บิล/วัน',
       })
     }
 

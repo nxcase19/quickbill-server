@@ -5,6 +5,7 @@
  */
 
 import { getEffectivePlan, fetchAccountBillingRow } from './planService.js'
+import { getPlanAccess } from './planAccess.js'
 import { safeQuery } from './tenantQuery.js'
 
 export const FREE_DAILY_DOC_LIMIT = 3
@@ -60,7 +61,7 @@ export async function countDocumentsCreatedThisMonth(pool, accountId) {
 export async function checkDocumentLimit(pool, accountId, additionalDocs = 1) {
   const accountRow = await fetchAccountBillingRow(pool, accountId)
   const eff = accountRow ? getEffectivePlan(accountRow) : 'free'
-  if (eff !== 'free') return
+  if (!getPlanAccess(eff).limitDocuments) return
 
   const add = Number(additionalDocs)
   const n = Number.isFinite(add) && add > 0 ? Math.floor(add) : 1
@@ -88,7 +89,7 @@ export async function incrementDocumentUsage(pool, accountId, delta = 1) {
 
   const accountRow = await fetchAccountBillingRow(pool, accountId)
   if (!accountRow) return
-  if (getEffectivePlan(accountRow) !== 'free') return
+  if (!getPlanAccess(getEffectivePlan(accountRow)).limitDocuments) return
 
   await pool.query(
     `INSERT INTO usage_stats (account_id, documents_today, documents_month, last_reset_date, usage_month_key)

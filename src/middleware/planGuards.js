@@ -4,7 +4,8 @@
 
 import { pool } from '../db.js'
 import { requireAccountId } from '../utils/tenantQuery.js'
-import { fetchAccountBillingRow, canUseFeature } from '../utils/planService.js'
+import { fetchAccountBillingRow, getEffectivePlan } from '../utils/planService.js'
+import { getPlanAccess } from '../utils/planAccess.js'
 import { checkDocumentLimit, LimitReachedError } from '../utils/usageService.js'
 
 const MSG_UPGRADE = 'อัปเกรดเพื่อใช้งานฟีเจอร์นี้'
@@ -61,7 +62,7 @@ export async function assertCanExport(req, res, next) {
     if (!row) {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    if (!canUseFeature(row, 'export')) {
+    if (!getPlanAccess(getEffectivePlan(row)).canExport) {
       return sendUpgrade(res, 'export')
     }
     next()
@@ -78,7 +79,7 @@ export async function assertCanUsePO(req, res, next) {
     if (!row) {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    if (!canUseFeature(row, 'purchase_orders')) {
+    if (!getPlanAccess(getEffectivePlan(row)).canUsePO) {
       return sendUpgrade(res, 'purchase_orders')
     }
     next()
@@ -100,7 +101,7 @@ export async function assertCanUseTaxPurchase(req, res, next) {
     if (!row) {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    if (!canUseFeature(row, 'tax_purchase')) {
+    if (!getPlanAccess(getEffectivePlan(row)).canUseAdvancedTax) {
       return sendUpgrade(res, 'tax_purchase')
     }
     next()

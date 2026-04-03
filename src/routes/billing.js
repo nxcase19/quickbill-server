@@ -7,8 +7,8 @@ import {
   getEffectivePlan,
   getStoredPlan,
   isTrialActive,
-  canUseFeature,
 } from '../utils/planService.js'
+import { getPlanAccess } from '../utils/planAccess.js'
 import {
   FREE_DAILY_DOC_LIMIT,
   FREE_MONTHLY_DOC_LIMIT,
@@ -121,9 +121,10 @@ async function buildBillingPlanData(db, accountId) {
 
   const effectivePlan = getEffectivePlan(row)
   const trialActive = isTrialActive(row)
+  const access = getPlanAccess(effectivePlan)
 
   let documentsCreatedToday = null
-  if (effectivePlan === 'free') {
+  if (access.limitDocuments) {
     documentsCreatedToday = await countDocumentsCreatedToday(db, accountId)
   }
 
@@ -135,9 +136,9 @@ async function buildBillingPlanData(db, accountId) {
     subscriptionEndsAt: row.subscription_ends_at ?? null,
     cancelAtPeriodEnd: row.cancel_at_period_end === true,
     features: {
-      export: canUseFeature(row, 'export'),
-      purchase_orders: canUseFeature(row, 'purchase_orders'),
-      tax_purchase: canUseFeature(row, 'tax_purchase'),
+      export: access.canExport,
+      purchase_orders: access.canUsePO,
+      tax_purchase: access.canUseAdvancedTax,
     },
     limits: {
       freeDocumentsPerDay: FREE_DAILY_DOC_LIMIT,

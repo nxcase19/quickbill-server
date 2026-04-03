@@ -325,9 +325,9 @@ export function renderDocument({ type, data, company, lang }) {
 
   const planLower = String(companySafeRaw.plan ?? '').toLowerCase()
 
+  /** Watermark: plan === 'free' only — trial / basic / pro / business → no watermark */
   let watermarkTier = null
 
-  // ✅ แสดงเฉพาะ FREE เท่านั้น
   if (planLower === 'free') {
     watermarkTier = 'FREE'
   }
