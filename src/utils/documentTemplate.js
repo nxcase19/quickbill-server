@@ -33,7 +33,7 @@ function formatMoneyPdf(n, locale) {
  * @param {object} opts.data
  * @param {object} opts.company - normalized company_settings (logo_url)
  * @param {'th'|'en'} [opts.lang]
- * @param {string|null|undefined} [opts.watermarkText] Diagonal watermark (e.g. FREE / TRIAL); null/empty = hidden
+ * @param {string|null|undefined} [opts.watermarkText] Legacy hint when company.plan is missing (non-empty → FREE tier)
  */
 export function renderDocument({ type, data, company, lang, watermarkText }) {
   const langResolved = lang === 'en' ? 'en' : 'th'
@@ -324,10 +324,53 @@ export function renderDocument({ type, data, company, lang, watermarkText }) {
     console.error('FONT LOAD ERROR:', e)
   }
 
-  const wmTrim =
-    watermarkText != null && String(watermarkText).trim() !== ''
-      ? String(watermarkText).trim()
-      : ''
+  const planLower = String(companySafeRaw.plan ?? '').toLowerCase()
+  let watermarkTier = null
+  if (planLower === 'free') watermarkTier = 'FREE'
+  else if (planLower === 'trial') watermarkTier = 'TRIAL'
+  else if (planLower === 'pro' || planLower === 'basic') watermarkTier = null
+  else if (watermarkText != null && String(watermarkText).trim() !== '') {
+    watermarkTier = 'FREE'
+  }
+
+  const watermarkLineEscaped = watermarkTier
+    ? escapeHtml(`QuickBill ${watermarkTier}`)
+    : ''
+
+  const watermarkGridHtml = watermarkTier
+    ? `<div style="
+position: fixed;
+top: 0;
+left: 0;
+width: 100%;
+height: 100%;
+z-index: 9999;
+pointer-events: none;
+display: flex;
+flex-wrap: wrap;
+justify-content: center;
+align-items: center;
+">
+${Array(12)
+  .fill(0)
+  .map(
+    () => `
+  <div style="
+    width: 33%;
+    text-align: center;
+    font-size: 60px;
+    color: rgba(0,0,0,0.05);
+    transform: rotate(-30deg);
+    font-weight: 700;
+    letter-spacing: 4px;
+    margin: 40px 0;
+  ">
+    ${watermarkLineEscaped}
+  </div>`,
+  )
+  .join('')}
+</div>`
+    : ''
 
   return `<!DOCTYPE html>
 <html lang="${isTH ? 'th' : 'en'}">
@@ -423,51 +466,7 @@ export function renderDocument({ type, data, company, lang, watermarkText }) {
   </style>
 </head>
 <body>
-  ${
-    wmTrim
-      ? `
-<div style="
-position: fixed;
-top: 50%;
-left: 50%;
-transform: translate(-50%, -50%) rotate(-30deg);
-font-size: 120px;
-color: rgba(0,0,0,0.06);
-white-space: nowrap;
-z-index: 9999;
-pointer-events: none;
-">
-${escapeHtml(wmTrim)}
-</div>
-
-<div style="
-position: fixed;
-top: 20%;
-left: 20%;
-transform: rotate(-30deg);
-font-size: 80px;
-color: rgba(0,0,0,0.05);
-z-index: 9999;
-pointer-events: none;
-">
-${escapeHtml(wmTrim)}
-</div>
-
-<div style="
-position: fixed;
-bottom: 20%;
-right: 15%;
-transform: rotate(-30deg);
-font-size: 80px;
-color: rgba(0,0,0,0.05);
-z-index: 9999;
-pointer-events: none;
-">
-${escapeHtml(wmTrim)}
-</div>
-`
-      : ''
-  }
+  ${watermarkGridHtml}
   <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
     <div style="display:flex; gap:12px; align-items:flex-start;">
       ${
