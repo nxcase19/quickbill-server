@@ -6,7 +6,6 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { formatDate } from './formatDate.js'
 import { resolvePdfLogoAbsoluteUrl } from './pdfLogoUrl.js'
-import { pdfIsFreePlan } from './pdfGenerator.js'
 
 function escapeHtml(v) {
   return String(v ?? '')
@@ -34,13 +33,12 @@ function formatMoneyPdf(n, locale) {
  * @param {object} opts.data
  * @param {object} opts.company - normalized company_settings (logo_url)
  * @param {'th'|'en'} [opts.lang]
- * @param {string} [opts.watermarkText] Free-plan footer line (escaped)
+ * @param {string|null|undefined} [opts.watermarkText] Diagonal watermark (e.g. FREE / TRIAL); null/empty = hidden
  */
-export function renderDocument({ type, data, company, lang = 'th', watermarkText = '' }) {
+export function renderDocument({ type, data, company, lang, watermarkText }) {
+  const langResolved = lang === 'en' ? 'en' : 'th'
+
   const companySafeRaw = company || {}
-  const isFree = pdfIsFreePlan(companySafeRaw)
-  console.log('PDF PLAN:', company?.plan)
-  console.log('IS FREE:', isFree)
 
   const companySafe = {
     name_th:
@@ -70,7 +68,7 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
       companySafeRaw.date_format || 'thai',
   }
   console.log('FINAL COMPANY USED IN PDF:', companySafe)
-  const isTH = lang === 'th'
+  const isTH = langResolved === 'th'
   const locale = isTH ? 'th-TH' : 'en-US'
   const dateFmt = companySafe?.date_format ?? 'thai'
 
@@ -140,7 +138,7 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   const docNo = escapeHtml(data.doc_no ?? '—')
   const dateRaw = data.doc_date ?? data.date
   const dateStr =
-    formatDate(dateRaw, lang, dateFmt) || escapeHtml(String(dateRaw ?? '—'))
+    formatDate(dateRaw, langResolved, dateFmt) || escapeHtml(String(dateRaw ?? '—'))
 
   const partyName = escapeHtml(data.party_name ?? '—')
   const partyAddress = escapeHtml(data.party_address ?? '-')
@@ -290,11 +288,6 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   const signLeftHtml = renderSignatureColumn(showLeftStamp, escapeHtml(leftLabel))
   const signRightHtml = renderSignatureColumn(showRightStamp, escapeHtml(rightLabel))
 
-  const wm = String(watermarkText ?? '').trim()
-  const watermarkBlock = wm
-    ? `<div class="pdf-plan-watermark" style="text-align:center;margin:10px 0 4px;font-size:11px;color:#94a3b8;letter-spacing:0.02em;">${escapeHtml(wm)}</div>`
-    : ''
-
   const summaryHtml =
     type !== 'dn'
       ? `<div class="summary">
@@ -330,6 +323,11 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
   } catch (e) {
     console.error('FONT LOAD ERROR:', e)
   }
+
+  const wmTrim =
+    watermarkText != null && String(watermarkText).trim() !== ''
+      ? String(watermarkText).trim()
+      : ''
 
   return `<!DOCTYPE html>
 <html lang="${isTH ? 'th' : 'en'}">
@@ -427,19 +425,22 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
       top: 40%;
       left: 15%;
       font-size: 70px;
-      color: rgba(0, 0, 0, 0.08);
+      color: rgba(0,0,0,0.08);
       transform: rotate(-30deg);
       z-index: 9999;
       pointer-events: none;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-      white-space: nowrap;
     }
 
   </style>
 </head>
 <body>
-  ${isFree ? '<div class="watermark">QuickBill FREE</div>' : ''}
+  ${
+    wmTrim
+      ? `
+<div class="watermark">${escapeHtml(wmTrim)}</div>
+`
+      : ''
+  }
   <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
     <div style="display:flex; gap:12px; align-items:flex-start;">
       ${
@@ -482,8 +483,6 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
       </div>
     </div>
   </div>
-
-  ${watermarkBlock}
 
   <hr />
 
