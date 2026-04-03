@@ -359,20 +359,11 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
     const company = buildCompanyForPdf(doc, fallbackCompany)
     applyPdfLogoBaseUrl(company)
 
-    const { rows: userRows } = await safeQuery(
-      pool,
-      `SELECT plan FROM users WHERE account_id = $1::uuid LIMIT 1`,
-      [accountId],
-    )
-
-    const dbPlan = userRows[0]?.plan || 'free'
-
-    console.log('PDF PLAN FROM DB:', dbPlan)
-
     const companyWithPlan = {
       ...company,
-      plan: dbPlan,
+      plan: company.plan || 'free',
     }
+    console.log('PDF PLAN FROM COMPANY:', company.plan)
     console.log('PDF FINAL COMPANY:', companyWithPlan)
 
     const kind = String(document.doc_type ?? 'INV').toUpperCase()
