@@ -90,6 +90,47 @@ async function resolveAccountIdFromSubscriptionRecord(subscription, db) {
 }
 
 /**
+ * @param {import('stripe').Stripe.Subscription} sub
+ * @returns {string|null}
+ */
+function stripeCustomerIdFromSubscription(sub) {
+  const c = sub?.customer
+  if (typeof c === 'string' && normalizeString(c)) return normalizeString(c)
+  if (c && typeof c === 'object' && c != null && 'id' in c) {
+    return normalizeString(/** @type {{ id?: string }} */ (c).id)
+  }
+  return null
+}
+
+/**
+ * @param {import('pg').Pool} db
+ * @param {unknown} customerId
+ * @returns {Promise<{ id: string } | null>}
+ */
+async function findAccountByCustomerId(db, customerId) {
+  let raw = ''
+  if (typeof customerId === 'string') {
+    raw = customerId
+  } else if (customerId && typeof customerId === 'object' && 'id' in customerId) {
+    raw = String(/** @type {{ id?: unknown }} */ (customerId).id ?? '')
+  } else if (customerId != null) {
+    raw = String(customerId)
+  }
+  const id = normalizeString(raw)
+  if (!id) return null
+  const { rows } = await db.query(
+    `SELECT id::text AS id
+     FROM accounts
+     WHERE stripe_customer_id = $1::text
+     LIMIT 1`,
+    [id],
+  )
+  const row = rows[0]
+  const aid = row?.id && normalizeString(row.id)
+  return aid ? { id: aid } : null
+}
+
+/**
  * @param {import('pg').Pool} db
  * @param {string} accountId
  * @returns {Promise<{ rowCount: number }>}
@@ -176,6 +217,7 @@ async function applyStripeSubscriptionToAccount(pool, accountId, subscription) {
 
   const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
   const cancelAtEnd = subscription.cancel_at_period_end === true
+  const stripeCust = stripeCustomerIdFromSubscription(subscription)
 
   await pool.query(
     `UPDATE accounts
@@ -183,9 +225,10 @@ async function applyStripeSubscriptionToAccount(pool, accountId, subscription) {
          subscription_id = $2::text,
          subscription_ends_at = $3::timestamptz,
          trial_ends_at = NOW(),
-         cancel_at_period_end = $4
+         cancel_at_period_end = $4,
+         stripe_customer_id = COALESCE(NULLIF(TRIM($6::text), ''), stripe_customer_id)
      WHERE id::text = $5`,
-    [planType, subscriptionIdStr, currentPeriodEnd, cancelAtEnd, accountId],
+    [planType, subscriptionIdStr, currentPeriodEnd, cancelAtEnd, accountId, stripeCust ?? ''],
   )
 
   const row = await fetchAccountBillingRow(pool, accountId)
@@ -718,6 +761,7 @@ export async function handleStripeWebhook(req, res) {
       if (priceId && envBusiness && priceId === envBusiness) planType = 'business'
 
       const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
+      const stripeCustomerId = stripeCustomerIdFromSubscription(subscription)
 
       console.log('[stripe] checkout.session.completed detail', {
         session_id: sessionId,
@@ -752,7 +796,8 @@ export async function handleStripeWebhook(req, res) {
            subscription_id = $2::text,
            subscription_ends_at = $3::timestamptz,
            trial_ends_at = NOW(),
-           cancel_at_period_end = false
+           cancel_at_period_end = false,
+           stripe_customer_id = COALESCE(NULLIF(TRIM($5::text), ''), stripe_customer_id)
          WHERE id::text = $4`
 
       const result = await pool.query(updateCheckoutAccountSql, [
@@ -760,6 +805,7 @@ export async function handleStripeWebhook(req, res) {
         subscriptionIdStr,
         currentPeriodEnd,
         accountId,
+        stripeCustomerId ?? '',
       ])
 
       console.log('[stripe] checkout.session.completed UPDATE primary', {
@@ -782,9 +828,10 @@ export async function handleStripeWebhook(req, res) {
              subscription_id = $2::text,
              subscription_ends_at = $3::timestamptz,
              trial_ends_at = NOW(),
-             cancel_at_period_end = false
+             cancel_at_period_end = false,
+             stripe_customer_id = COALESCE(NULLIF(TRIM($4::text), ''), stripe_customer_id)
            WHERE subscription_id = $2::text`,
-          [planType, subscriptionIdStr, currentPeriodEnd],
+          [planType, subscriptionIdStr, currentPeriodEnd, stripeCustomerId ?? ''],
         )
         fallbackBySubRowCount = fallback.rowCount
         console.log('[stripe] fallback update result', {
@@ -838,6 +885,7 @@ export async function handleStripeWebhook(req, res) {
               subscriptionIdStr,
               currentPeriodEnd,
               altId,
+              stripeCustomerId ?? '',
             ])
             updatedRows = resultFb.rowCount
             finalAccountId = altId
@@ -894,6 +942,10 @@ export async function handleStripeWebhook(req, res) {
         cancel_at_period_end: cancelAtEnd,
         resolution: source,
       })
+
+      if (accountId && cancelAtEnd) {
+        console.log('[INFO] subscription will cancel at period end', { account_id: accountId })
+      }
 
       if (!accountId) {
         console.warn('[stripe] customer.subscription.updated: missing account_id', {
@@ -959,6 +1011,7 @@ export async function handleStripeWebhook(req, res) {
         subscription_id: subscriptionId || null,
         updated_rows: down.rowCount,
       })
+      console.log('[DOWNGRADE] subscription canceled → FREE:', accountId)
 
       return res.status(200).json({ received: true })
     }
@@ -978,8 +1031,20 @@ export async function handleStripeWebhook(req, res) {
       }
 
       const subscription = await stripe.subscriptions.retrieve(subscriptionIdStr)
-      const { accountId, subscriptionId: subIdFromRecord, source } =
+      let { accountId, subscriptionId: subIdFromRecord, source } =
         await resolveAccountIdFromSubscriptionRecord(subscription, pool)
+
+      const invCustomerId = stripeCustomerIdFromSubscription({
+        customer: invoice.customer,
+      })
+      const subCustomerId = stripeCustomerIdFromSubscription(subscription)
+      if (!accountId && invCustomerId && subCustomerId === invCustomerId) {
+        const acct = await findAccountByCustomerId(pool, invCustomerId)
+        if (acct) {
+          accountId = acct.id
+          source = 'stripe_customer_id'
+        }
+      }
 
       console.log('[stripe] invoice.payment_succeeded', {
         account_id: accountId,
@@ -994,20 +1059,26 @@ export async function handleStripeWebhook(req, res) {
         return res.status(200).json({ received: true })
       }
 
-      const end = safeDateFromUnixSeconds(subscription.current_period_end, 30)
-      const result = await pool.query(
-        `UPDATE accounts
-         SET subscription_ends_at = $2::timestamptz
-         WHERE id::text = $1`,
-        [accountId, end],
-      )
-
-      console.log('[stripe] invoice.payment_succeeded: db updated', {
-        account_id: accountId,
-        subscription_id: subIdFromRecord || subscriptionIdStr,
-        computed_current_period_end: end.toISOString(),
-        updated_rows: result.rowCount,
-      })
+      const applied = await applyStripeSubscriptionToAccount(pool, accountId, subscription)
+      if (applied.applied && !applied.downgraded) {
+        console.log('[RENEWAL] payment success → keep paid tier:', accountId, applied.storedPlan)
+      } else if (!applied.applied && applied.reason === 'unknown_price') {
+        const end = safeDateFromUnixSeconds(subscription.current_period_end, 30)
+        const stripeCust = stripeCustomerIdFromSubscription(subscription)
+        const result = await pool.query(
+          `UPDATE accounts
+           SET subscription_ends_at = $2::timestamptz,
+               stripe_customer_id = COALESCE(NULLIF(TRIM($3::text), ''), stripe_customer_id)
+           WHERE id::text = $1`,
+          [accountId, end, stripeCust ?? ''],
+        )
+        console.log('[stripe] invoice.payment_succeeded: extended period only (unknown price)', {
+          account_id: accountId,
+          subscription_id: subIdFromRecord || subscriptionIdStr,
+          computed_current_period_end: end.toISOString(),
+          updated_rows: result.rowCount,
+        })
+      }
 
       return res.status(200).json({ received: true })
     }
@@ -1021,11 +1092,49 @@ export async function handleStripeWebhook(req, res) {
           : rawSub && typeof rawSub === 'object' && rawSub != null && 'id' in rawSub
             ? String(/** @type {{ id: string }} */ (rawSub).id)
             : ''
-      console.warn('[stripe] invoice.payment_failed (no immediate downgrade)', {
-        invoice_id: invoice.id,
-        subscription_id: normalizeString(subscriptionId) || null,
-        attempt_count: invoice.attempt_count,
-      })
+      const subscriptionIdStr = normalizeString(subscriptionId)
+
+      try {
+        let accountId = null
+        if (subscriptionIdStr) {
+          const subscription = await stripe.subscriptions.retrieve(subscriptionIdStr)
+          accountId = (await resolveAccountIdFromSubscriptionRecord(subscription, pool)).accountId
+          const invCust = stripeCustomerIdFromSubscription({ customer: invoice.customer })
+          const subCust = stripeCustomerIdFromSubscription(subscription)
+          if (!accountId && invCust && subCust === invCust) {
+            const acct = await findAccountByCustomerId(pool, invCust)
+            if (acct) accountId = acct.id
+          }
+        } else {
+          const invCust = stripeCustomerIdFromSubscription({ customer: invoice.customer })
+          if (invCust) {
+            const acct = await findAccountByCustomerId(pool, invCust)
+            if (acct) accountId = acct.id
+          }
+        }
+
+        if (accountId) {
+          const down = await downgradeAccountAfterSubscriptionRemoved(pool, accountId)
+          console.log('[DOWNGRADE] payment failed → FREE:', accountId, {
+            invoice_id: invoice.id,
+            subscription_id: subscriptionIdStr || null,
+            attempt_count: invoice.attempt_count,
+            updated_rows: down.rowCount,
+          })
+        } else {
+          console.warn('[stripe] invoice.payment_failed: could not resolve account', {
+            invoice_id: invoice.id,
+            subscription_id: subscriptionIdStr || null,
+            attempt_count: invoice.attempt_count,
+          })
+        }
+      } catch (e) {
+        console.error('[stripe] invoice.payment_failed handler', {
+          message: e instanceof Error ? e.message : String(e),
+          invoice_id: invoice.id,
+        })
+      }
+
       return res.status(200).json({ received: true })
     }
 
