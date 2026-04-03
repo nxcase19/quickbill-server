@@ -62,7 +62,9 @@ export async function assertCanExport(req, res, next) {
     if (!row) {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    if (!getPlanAccess(getEffectivePlan(row)).canExport) {
+    const eff = getEffectivePlan(row)
+    console.log('CHECK PLAN:', eff)
+    if (!getPlanAccess(eff).canExport) {
       return sendUpgrade(res, 'export')
     }
     next()
@@ -79,7 +81,9 @@ export async function assertCanUsePO(req, res, next) {
     if (!row) {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    if (!getPlanAccess(getEffectivePlan(row)).canUsePO) {
+    const eff = getEffectivePlan(row)
+    console.log('CHECK PLAN:', eff)
+    if (!getPlanAccess(eff).canUsePO) {
       return sendUpgrade(res, 'purchase_orders')
     }
     next()
@@ -101,7 +105,9 @@ export async function assertCanUseTaxPurchase(req, res, next) {
     if (!row) {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    if (!getPlanAccess(getEffectivePlan(row)).canUseAdvancedTax) {
+    const eff = getEffectivePlan(row)
+    console.log('CHECK PLAN:', eff)
+    if (!getPlanAccess(eff).canUseAdvancedTax) {
       return sendUpgrade(res, 'tax_purchase')
     }
     next()

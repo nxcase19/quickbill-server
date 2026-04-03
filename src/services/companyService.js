@@ -109,7 +109,7 @@ function withResolvedPlan(header, billingAccount) {
   const eff = getEffectivePlan(billingAccount)
   const company = { ...header, plan: eff }
   company.plan = company.plan || 'free'
-  console.log('GET COMPANY PLAN:', company.plan)
+  console.log('CHECK PLAN:', company.plan)
   return company
 }
 

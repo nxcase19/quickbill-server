@@ -4,6 +4,7 @@
  */
 
 import { safeQuery } from './tenantQuery.js'
+import { allowsProBasicAndTrial } from './planAccess.js'
 
 export const PLAN_TYPES = Object.freeze(['free', 'trial', 'basic', 'pro', 'business'])
 
@@ -120,12 +121,8 @@ export function getEffectivePlan(account) {
  */
 export function canUseFeature(account, feature) {
   const eff = getEffectivePlan(account)
-  const tier = eff === 'trial' ? 'pro' : eff
-  if (feature === 'export') {
-    return tier !== 'free'
-  }
-  if (feature === 'purchase_orders' || feature === 'tax_purchase') {
-    return tier === 'pro' || tier === 'business'
+  if (feature === 'export' || feature === 'purchase_orders' || feature === 'tax_purchase') {
+    return allowsProBasicAndTrial(eff)
   }
   return false
 }

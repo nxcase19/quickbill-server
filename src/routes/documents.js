@@ -19,7 +19,7 @@ import {
   countDocumentsCreatedToday,
   incrementDocumentUsage,
 } from '../utils/usageService.js'
-import { getPlanAccess } from '../utils/planAccess.js'
+import { allowsProBasicAndTrial, getPlanAccess } from '../utils/planAccess.js'
 
 /** Legacy bigint company_id for INSERT only when the column is NOT NULL; never used as tenant filter. */
 function legacyCompanyIdForInsert(req) {
@@ -36,7 +36,9 @@ function legacyCompanyIdForInsert(req) {
  * @param {string} [plan]
  */
 async function checkDocumentLimit(client, accountId, plan) {
-  const access = getPlanAccess(plan)
+  const planNorm = String(plan ?? 'free').toLowerCase()
+  console.log('CHECK PLAN:', planNorm)
+  const access = getPlanAccess(planNorm)
 
   if (!access.limitDocuments) {
     return { allowed: true }
@@ -240,6 +242,7 @@ router.get('/usage/today', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
     const plan = String(req.user?.plan || 'free').toLowerCase()
+    console.log('CHECK PLAN:', plan)
     const access = getPlanAccess(plan)
     const count = await countDocumentsCreatedToday(pool, accountId)
     const limit = access.limitDocuments ? FREE_DAILY_DOC_LIMIT : null
@@ -264,6 +267,7 @@ router.get('/usage', async (req, res) => {
   const client = await pool.connect()
   try {
     const plan = String(req.user?.plan || 'free').toLowerCase()
+    console.log('CHECK PLAN:', plan)
     const access = getPlanAccess(plan)
 
     const todayRes = await client.query(
@@ -673,7 +677,9 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
       : [req.body.doc_type || 'INV']
 
     const wantsPo = rawDocTypes.some((t) => String(t).trim().toUpperCase() === 'PO')
-    if (wantsPo && !getPlanAccess(String(req.user?.plan || 'free').toLowerCase()).canUsePO) {
+    const userPlan = String(req.user?.plan || 'free').toLowerCase()
+    console.log('CHECK PLAN:', userPlan)
+    if (wantsPo && !allowsProBasicAndTrial(userPlan)) {
       return res.status(403).json({
         success: false,
         error: 'FEATURE_LOCKED',
@@ -697,6 +703,7 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
     }
 
     const plan = String(req.user?.plan || 'free').toLowerCase()
+    console.log('CHECK PLAN:', plan)
     const access = getPlanAccess(plan)
 
     const countResult = await safeQuery(
