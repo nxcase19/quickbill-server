@@ -370,9 +370,13 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
       snapshot_logo: snapshot.logo_url,
     })
 
+    if (!company.plan) {
+      console.warn('⚠️ company.plan is missing!', company)
+    }
+
     const companyWithPlan = {
       ...finalCompany,
-      plan: company.plan || 'free',
+      plan: company.plan,
     }
     console.log('PDF PLAN FROM COMPANY:', company.plan)
     console.log('PDF FINAL COMPANY:', companyWithPlan)

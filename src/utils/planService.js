@@ -86,13 +86,31 @@ function paidTierWhileSubscribed(account) {
  * - Else → free.
  * plan_type alone never grants paid; subscription_id + subscription_ends_at do.
  * @param {object|null|undefined} account
- * @returns {'free'|'trial'|'basic'|'pro'|'business'}
+ * @returns {'free'|'trial'|'basic'|'pro'}
  */
 export function getEffectivePlan(account) {
-  if (!account) return 'free'
-  if (hasActiveSubscription(account)) return paidTierWhileSubscribed(account)
-  if (isTrialActive(account)) return 'trial'
-  return 'free'
+  let eff
+  if (!account) {
+    eff = 'free'
+  } else if (hasActiveSubscription(account)) {
+    eff = paidTierWhileSubscribed(account)
+  } else if (isTrialActive(account)) {
+    eff = 'trial'
+  } else {
+    eff = 'free'
+  }
+
+  let normalized = String(eff || '').toLowerCase()
+  if (normalized.startsWith('pro')) normalized = 'pro'
+  else if (normalized.startsWith('business')) normalized = 'pro'
+  else if (normalized.startsWith('basic')) normalized = 'basic'
+  else if (normalized === 'trial') normalized = 'trial'
+  else normalized = 'free'
+
+  console.log('EFFECTIVE PLAN RAW:', eff)
+  console.log('EFFECTIVE PLAN NORMALIZED:', normalized)
+
+  return normalized
 }
 
 /**
