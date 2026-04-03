@@ -288,7 +288,7 @@ router.post('/create-checkout-session', async (req, res) => {
       mode: 'subscription',
       customer_email: email,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${frontend}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${frontend}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${frontend}/pricing`,
       client_reference_id: accountId,
       metadata: {
