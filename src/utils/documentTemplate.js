@@ -325,17 +325,30 @@ export function renderDocument({ type, data, company, lang, watermarkText }) {
   }
 
   const planLower = String(companySafeRaw.plan ?? '').toLowerCase()
+
   let watermarkTier = null
-  if (planLower === 'free') watermarkTier = 'FREE'
-  else if (planLower === 'trial') watermarkTier = 'TRIAL'
-  else if (planLower === 'pro' || planLower === 'basic') watermarkTier = null
-  else if (watermarkText != null && String(watermarkText).trim() !== '') {
+
+  if (planLower === 'free') {
+    watermarkTier = 'FREE'
+  } else if (planLower === 'trial') {
+    watermarkTier = null // 🔥 TRIAL ไม่มี watermark
+  } else if (planLower === 'pro' || planLower === 'basic') {
+    watermarkTier = null
+  } else if (watermarkText != null && String(watermarkText).trim() !== '') {
     watermarkTier = 'FREE'
   }
 
   const watermarkLineEscaped = watermarkTier
     ? escapeHtml(`QuickBill ${watermarkTier}`)
     : ''
+
+  let watermarkOpacity = '0.06'
+  let fontWeight = '500'
+
+  if (watermarkTier === 'TRIAL') {
+    watermarkOpacity = '0.10'
+    fontWeight = '700'
+  }
 
   const watermarkGridHtml = watermarkTier
     ? `<div style="
@@ -359,9 +372,9 @@ ${Array(12)
     align-items: center;
     justify-content: center;
     font-size: 55px;
-    color: rgba(0,0,0,0.03);
+    color: rgba(0,0,0,${watermarkOpacity});
     transform: rotate(-30deg);
-    font-weight: 500;
+    font-weight: ${fontWeight};
     letter-spacing: 2px;
   ">
     ${watermarkLineEscaped}
