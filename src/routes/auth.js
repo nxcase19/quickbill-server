@@ -283,45 +283,56 @@ router.post('/login', async (req, res) => {
 })
 
 router.post('/google', async (req, res) => {
-  const idTokenRaw = req.body?.token ?? req.body?.credential
-  const idToken = idTokenRaw != null ? String(idTokenRaw).trim() : ''
-  if (!idToken) {
-    return res.status(400).json({ success: false, error: 'token is required' })
-  }
-
-  const googleClientId = process.env.GOOGLE_CLIENT_ID != null ? String(process.env.GOOGLE_CLIENT_ID).trim() : ''
-  if (!googleClientId) {
-    return res.status(503).json({ success: false, error: 'Google sign-in is not configured' })
-  }
-
-  let payload
   try {
+    console.log('Google login request received')
+
+    const idTokenRaw = req.body?.token ?? req.body?.credential
+    const idToken = idTokenRaw != null ? String(idTokenRaw).trim() : ''
+    if (!idToken) {
+      return res.status(400).json({ success: false, error: 'token is required' })
+    }
+
+    const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim()
+    if (!googleClientId) {
+      console.error(
+        'GOOGLE_CLIENT_ID is missing — add it in Railway / server environment (same value as Google OAuth Web client ID)',
+      )
+      return res.status(503).json({
+        success: false,
+        error:
+          'Google sign-in is not configured (GOOGLE_CLIENT_ID missing on server). Set GOOGLE_CLIENT_ID in deployment env.',
+      })
+    }
+
     const oAuth = new OAuth2Client(googleClientId)
-    const ticket = await oAuth.verifyIdToken({
-      idToken,
-      audience: googleClientId,
-    })
-    payload = ticket.getPayload()
-  } catch (err) {
-    console.error('POST /auth/google verify:', err)
-    return res.status(401).json({ success: false, error: 'Invalid Google token' })
-  }
+    let payload
+    try {
+      const ticket = await oAuth.verifyIdToken({
+        idToken,
+        audience: googleClientId,
+      })
+      payload = ticket.getPayload()
+    } catch (verifyErr) {
+      console.error('POST /auth/google verify:', verifyErr)
+      return res.status(401).json({ success: false, error: 'Invalid Google token' })
+    }
 
-  if (!payload) {
-    return res.status(401).json({ success: false, error: 'Invalid Google token' })
-  }
+    if (!payload) {
+      return res.status(401).json({ success: false, error: 'Invalid Google token' })
+    }
 
-  const email =
-    payload.email != null ? String(payload.email).trim().toLowerCase() : ''
-  const sub = payload.sub != null ? String(payload.sub).trim() : ''
-  if (!email || !sub) {
-    return res.status(401).json({ success: false, error: 'Invalid Google profile' })
-  }
-  if (payload.email_verified === false) {
-    return res.status(401).json({ success: false, error: 'Google email is not verified' })
-  }
+    const email =
+      payload.email != null ? String(payload.email).trim().toLowerCase() : ''
+    const sub = payload.sub != null ? String(payload.sub).trim() : ''
+    if (!email || !sub) {
+      return res.status(401).json({ success: false, error: 'Invalid Google profile' })
+    }
+    if (payload.email_verified === false) {
+      return res.status(401).json({ success: false, error: 'Google email is not verified' })
+    }
 
-  try {
+    console.log('Google user verified:', email)
+
     const { rows: existing } = await safeQuery(
       pool,
       `SELECT id, account_id, company_id, email, password_hash, google_sub
@@ -378,16 +389,16 @@ router.post('/google', async (req, res) => {
       })
     }
 
-    const client = await pool.connect()
+    const dbClient = await pool.connect()
     try {
-      await client.query('BEGIN')
+      await dbClient.query('BEGIN')
       const { userRow, companyId, accountRows } = await insertNewTenantWithUser(
-        client,
+        dbClient,
         email,
         null,
         sub,
       )
-      await client.query('COMMIT')
+      await dbClient.query('COMMIT')
 
       const token = signAuthToken({
         userId: userRow.id,
@@ -405,19 +416,35 @@ router.post('/google', async (req, res) => {
           account: mapAccountRowWithPlan(accountRows[0]),
         },
       })
-    } catch (err) {
-      await client.query('ROLLBACK')
-      if (err.code === '23505') {
+    } catch (signupErr) {
+      try {
+        await dbClient.query('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      if (signupErr.code === '23505') {
         return res.status(409).json({ success: false, error: 'Email already registered' })
       }
-      console.error('POST /auth/google signup:', err)
-      return res.status(500).json({ success: false, error: 'Internal server error' })
+      throw signupErr
     } finally {
-      client.release()
+      dbClient.release()
     }
   } catch (err) {
-    console.error('POST /auth/google error:', err)
-    return res.status(500).json({ success: false, error: 'Internal server error' })
+    console.error('GOOGLE LOGIN ERROR:', err)
+    if (res.headersSent) {
+      return
+    }
+    if (err && err.code === '42703') {
+      return res.status(500).json({
+        success: false,
+        error:
+          'Database missing Google columns (run migration 041_users_google_oauth.sql on the database)',
+      })
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Google auth failed',
+    })
   }
 })
 
