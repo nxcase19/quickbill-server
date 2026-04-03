@@ -11,7 +11,7 @@ import { logTenantAccess } from '../utils/tenantDebug.js'
 import { requireAccountId, safeQuery } from '../utils/tenantQuery.js'
 import { renderDocument } from '../utils/documentTemplate.js'
 import { getCompany } from '../services/companyService.js'
-import { applyPdfLogoBaseUrl, buildCompanyForPdf } from '../utils/buildCompanyForPdf.js'
+import { applyPdfLogoBaseUrl } from '../utils/buildCompanyForPdf.js'
 import { assertCanCreateDocument } from '../middleware/planGuards.js'
 import { pdfIsFreePlan } from '../utils/pdfGenerator.js'
 import {
@@ -354,13 +354,28 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
       }
     }
 
-    const fallbackCompany = await getCompany(pool, accountId)
-    const doc = document
-    const company = buildCompanyForPdf(doc, fallbackCompany)
-    applyPdfLogoBaseUrl(company)
+    const company = await getCompany(pool, accountId)
+
+    const snapshot = document.company_snapshot || {}
+
+    const finalCompany = {
+      ...company,
+      name_th: snapshot.name_th || company.name_th,
+      address: snapshot.address || company.address,
+      phone: snapshot.phone || company.phone,
+      tax_id: snapshot.tax_id || company.tax_id,
+    }
+
+    applyPdfLogoBaseUrl(finalCompany)
+
+    console.log('PDF COMPANY SOURCE:', {
+      plan: company.plan,
+      logo: company.logo_url,
+      snapshot_logo: snapshot.logo_url,
+    })
 
     const companyWithPlan = {
-      ...company,
+      ...finalCompany,
       plan: company.plan || 'free',
     }
     console.log('PDF PLAN FROM COMPANY:', company.plan)
