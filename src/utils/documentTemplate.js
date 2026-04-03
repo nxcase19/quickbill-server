@@ -33,9 +33,8 @@ function formatMoneyPdf(n, locale) {
  * @param {object} opts.data
  * @param {object} opts.company - normalized company_settings (logo_url)
  * @param {'th'|'en'} [opts.lang]
- * @param {string|null|undefined} [opts.watermarkText] Legacy hint when company.plan is missing (non-empty → FREE tier)
  */
-export function renderDocument({ type, data, company, lang, watermarkText }) {
+export function renderDocument({ type, data, company, lang }) {
   const langResolved = lang === 'en' ? 'en' : 'th'
 
   const companySafeRaw = company || {}
@@ -331,9 +330,9 @@ export function renderDocument({ type, data, company, lang, watermarkText }) {
   // ✅ แสดงเฉพาะ FREE เท่านั้น
   if (planLower === 'free') {
     watermarkTier = 'FREE'
-  } else {
-    watermarkTier = null
   }
+
+  // ❌ ห้ามมี fallback ใด ๆ อีก
 
   const watermarkLineEscaped = watermarkTier
     ? escapeHtml(`QuickBill ${watermarkTier}`)
