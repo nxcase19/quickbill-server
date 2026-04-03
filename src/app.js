@@ -35,7 +35,7 @@ const CORS_ORIGINS = [
  */
 const corsDiagnostic = process.env.CORS_DIAGNOSTIC === 'true'
 
-// FIRST middleware — before express.json(), routes, webhooks, everything
+// FIRST middleware — before express.json(), routes, webhooks, everything (covers /api/billing/plan preflight + responses)
 app.use(
   cors(
     corsDiagnostic
@@ -43,13 +43,13 @@ app.use(
           origin: true,
           credentials: true,
           methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-          allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
+          allowedHeaders: ['Content-Type', 'Authorization'],
         }
       : {
           origin: CORS_ORIGINS,
           credentials: true,
           methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-          allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
+          allowedHeaders: ['Content-Type', 'Authorization'],
         },
   ),
 )
