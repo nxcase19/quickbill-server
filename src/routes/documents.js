@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import jwt from 'jsonwebtoken'
 import puppeteer from 'puppeteer'
@@ -42,7 +43,7 @@ async function checkDocumentLimit(client, accountId, plan) {
   if (!isFreeLike) return { allowed: true }
 
   const todayRes = await client.query(
-    `SELECT COUNT(*)
+    `SELECT COUNT(DISTINCT group_id)
      FROM documents
      WHERE account_id = $1::uuid
        AND created_at >= date_trunc('day', NOW())`,
@@ -59,7 +60,7 @@ async function checkDocumentLimit(client, accountId, plan) {
   }
 
   const monthRes = await client.query(
-    `SELECT COUNT(*)
+    `SELECT COUNT(DISTINCT group_id)
      FROM documents
      WHERE account_id = $1::uuid
        AND created_at >= date_trunc('month', NOW())`,
@@ -751,6 +752,7 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
       }
 
       const orderId = Date.now().toString()
+      const groupId = randomUUID()
       const primaryType = docTypes.includes('INV') ? 'INV' : docTypes[0]
       const legacyCompanyId = legacyCompanyIdForInsert(req)
 
@@ -781,8 +783,8 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
         if (legacyCompanyId != null) {
           insertSql = `INSERT INTO documents (
       account_id, company_id, company_name, company_address, company_phone, company_tax_id, company_logo_url, customer_name, customer_address, customer_phone, customer_tax_id, doc_no, doc_type, doc_date,
-      subtotal, vat_enabled, vat_rate, total, payment_status, status, order_id, note
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::date,CURRENT_DATE),$15,$16,$17,$18,'unpaid','draft',$19,$20)
+      subtotal, vat_enabled, vat_rate, total, payment_status, status, order_id, note, group_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::date,CURRENT_DATE),$15,$16,$17,$18,'unpaid','draft',$19,$20,$21::uuid)
     RETURNING id`
           insertParams = [
             accountId,
@@ -805,12 +807,13 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
             total,
             orderId,
             note,
+            groupId,
           ]
         } else {
           insertSql = `INSERT INTO documents (
       account_id, company_name, company_address, company_phone, company_tax_id, company_logo_url, customer_name, customer_address, customer_phone, customer_tax_id, doc_no, doc_type, doc_date,
-      subtotal, vat_enabled, vat_rate, total, payment_status, status, order_id, note
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date,CURRENT_DATE),$14,$15,$16,$17,'unpaid','draft',$18,$19)
+      subtotal, vat_enabled, vat_rate, total, payment_status, status, order_id, note, group_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date,CURRENT_DATE),$14,$15,$16,$17,'unpaid','draft',$18,$19,$20::uuid)
     RETURNING id`
           insertParams = [
             accountId,
@@ -832,6 +835,7 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
             total,
             orderId,
             note,
+            groupId,
           ]
         }
 
