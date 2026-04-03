@@ -245,6 +245,58 @@ router.get('/usage/today', async (req, res) => {
   }
 })
 
+router.get('/usage', async (req, res) => {
+  let accountId
+  try {
+    accountId = requireAccountId(req)
+  } catch {
+    return res.status(401).json({ success: false, error: 'Unauthorized' })
+  }
+
+  const client = await pool.connect()
+  try {
+    const plan = req.user?.plan || 'FREE'
+    const planUpper = String(plan).toUpperCase()
+
+    const todayRes = await client.query(
+      `SELECT COUNT(DISTINCT group_id) AS count
+       FROM documents
+       WHERE account_id = $1::uuid
+         AND created_at >= date_trunc('day', NOW())`,
+      [accountId],
+    )
+
+    const monthRes = await client.query(
+      `SELECT COUNT(DISTINCT group_id) AS count
+       FROM documents
+       WHERE account_id = $1::uuid
+         AND created_at >= date_trunc('month', NOW())`,
+      [accountId],
+    )
+
+    const todayCount = parseInt(String(todayRes.rows[0]?.count ?? '0'), 10)
+    const monthCount = parseInt(String(monthRes.rows[0]?.count ?? '0'), 10)
+
+    return res.json({
+      success: true,
+      plan,
+      today: {
+        used: todayCount,
+        limit: planUpper === 'PRO' ? null : 3,
+      },
+      month: {
+        used: monthCount,
+        limit: planUpper === 'PRO' ? null : 50,
+      },
+    })
+  } catch (err) {
+    console.error('GET usage error:', err)
+    res.status(500).json({ error: err.message })
+  } finally {
+    client.release()
+  }
+})
+
 router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
   let accountId
   try {
