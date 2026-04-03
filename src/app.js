@@ -20,21 +20,25 @@ import { handleStripeWebhook } from './routes/billing.js'
 
 const app = express()
 
-// CORS must be before all routes (including auth)
-const CORS_ORIGINS = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'https://quickbill-web.vercel.app',
-]
+// CORS must be before all routes (including auth + preflight)
+const corsOptions = {
+  origin: [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://quickbill-web.vercel.app',
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}
 
-app.use(
-  cors({
-    origin: CORS_ORIGINS,
-    credentials: true,
-  }),
-)
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
 
-app.options('*', cors({ origin: CORS_ORIGINS, credentials: true }))
+app.use((req, res, next) => {
+  console.log('Incoming request:', req.method, req.path)
+  next()
+})
 
 // 🔥 MUST BE FIRST (Stripe webhook uses raw body)
 app.post(
