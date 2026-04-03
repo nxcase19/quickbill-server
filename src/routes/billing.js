@@ -136,6 +136,7 @@ async function findAccountByCustomerId(db, customerId) {
  * @returns {Promise<{ rowCount: number }>}
  */
 async function downgradeAccountAfterSubscriptionRemoved(db, accountId) {
+  // Never downgrade historical/free-only accounts without a real subscription.
   const result = await db.query(
     `UPDATE accounts
      SET
@@ -144,7 +145,8 @@ async function downgradeAccountAfterSubscriptionRemoved(db, accountId) {
        subscription_ends_at = NULL,
        cancel_at_period_end = false
      WHERE id::text = $1
-       AND plan_type != 'free'`,
+       AND plan_type != 'free'
+       AND subscription_id IS NOT NULL`,
     [accountId],
   )
   if (result.rowCount === 0) {
@@ -253,6 +255,13 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
   }
 
   const existingSubId = normalizeString(row.subscription_id)
+  console.log('[BILLING PLAN]', {
+    accountId,
+    existingSubId: existingSubId || null,
+    effectivePlan: getEffectivePlan(row),
+    storedPlan: getStoredPlan(row),
+  })
+
   if (existingSubId) {
     try {
       const sub = await stripe.subscriptions.retrieve(existingSubId)
@@ -286,11 +295,28 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
         }
       }
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+
       console.warn('[billing] sync-plan: retrieve by subscription_id failed', {
         account_id: accountId,
         subscription_id: existingSubId,
-        message: e instanceof Error ? e.message : String(e),
+        message: msg,
       })
+
+      const shouldSkipSync =
+        existingSubId.toLowerCase().startsWith('sub_test') ||
+        msg.includes('No such subscription')
+
+      if (shouldSkipSync) {
+        const row2 = await fetchAccountBillingRow(pool, accountId)
+        return {
+          ok: true,
+          applied: false,
+          source: 'skip_invalid_subscription',
+          effectivePlan: getEffectivePlan(row2),
+          storedPlan: getStoredPlan(row2),
+        }
+      }
     }
   }
 
@@ -365,8 +391,16 @@ async function buildBillingPlanData(db, accountId) {
   const row = await fetchAccountBillingRow(db, accountId)
   if (!row) return null
 
+  const existingSubId = normalizeString(row.subscription_id)
   const effectivePlan = getEffectivePlan(row)
   const trialActive = isTrialActive(row)
+
+  console.log('[BILLING PLAN]', {
+    accountId,
+    existingSubId: existingSubId || null,
+    effectivePlan,
+    storedPlan: getStoredPlan(row),
+  })
   const access = getPlanAccess(effectivePlan)
 
   let documentsCreatedToday = null
@@ -488,6 +522,11 @@ router.get('/trial-status', async (req, res) => {
   }
 })
 
+/**
+ * Manual / post-checkout sync only. Fake IDs like `sub_test` must not trigger DB downgrade
+ * when Stripe lookup fails — see `syncAccountPlanFromStripe` skip_invalid_subscription.
+ * Production accounts should use real Stripe subscription ids.
+ */
 router.get('/sync-plan', async (req, res) => {
   try {
     let accountId
@@ -523,6 +562,14 @@ router.get('/sync-plan', async (req, res) => {
         error: out.error === 'account_not_found' ? 'Account not found' : 'Sync failed',
       })
     }
+
+    console.log('[SYNC PLAN RESULT]', {
+      accountId,
+      source: out.source,
+      effectivePlan: out.effectivePlan,
+      storedPlan: out.storedPlan,
+      applied: out.applied,
+    })
 
     const plan = out.effectivePlan ?? 'free'
     return res.json({

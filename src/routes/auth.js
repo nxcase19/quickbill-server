@@ -9,25 +9,12 @@ import {
   getEffectivePlan,
   isTrialActive,
 } from '../utils/planService.js'
-import { getStripeClient } from '../utils/stripeBilling.js'
-import { syncAccountPlanFromStripe } from './billing.js'
-
 const router = Router()
 
 const SALT_ROUNDS = 10
 
 /** Placeholder until user fills company_settings (not shown as real company name in PDF if empty snapshot). */
 const REGISTER_PLACEHOLDER_NAME = '-'
-
-async function syncStripePlanAfterLogin(accountId, email) {
-  try {
-    const stripe = getStripeClient()
-    if (!stripe) return
-    await syncAccountPlanFromStripe(pool, stripe, accountId, email)
-  } catch (e) {
-    console.warn('[auth] syncStripePlanAfterLogin:', e instanceof Error ? e.message : e)
-  }
-}
 
 function mapUserRow(row) {
   if (!row) return null
@@ -274,8 +261,6 @@ router.post('/login', async (req, res) => {
       }
     }
 
-    await syncStripePlanAfterLogin(row.account_id, row.email)
-
     const billingRow = await fetchAccountBillingRow(pool, row.account_id)
 
     const token = signAuthToken({
@@ -399,8 +384,6 @@ router.post('/google', async (req, res) => {
         }
       }
 
-      await syncStripePlanAfterLogin(row.account_id, row.email)
-
       const billingRow = await fetchAccountBillingRow(pool, row.account_id)
 
       console.log('LOGIN USER PLAN:', billingRow?.plan_type)
@@ -435,8 +418,6 @@ router.post('/google', async (req, res) => {
         { newAccountPlan: 'trial' },
       )
       await dbClient.query('COMMIT')
-
-      await syncStripePlanAfterLogin(userRow.account_id, userRow.email)
 
       const billingRow = await fetchAccountBillingRow(pool, userRow.account_id)
 
