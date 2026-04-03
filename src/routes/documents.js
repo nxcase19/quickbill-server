@@ -394,6 +394,10 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
         : ''
 
     const watermarkText = pdfIsFreePlan(company) ? 'QuickBill FREE' : null
+    console.log("WATERMARK DEBUG:", {
+      plan: company.plan,
+      watermarkText,
+    })
 
     // Load Thai font as base64 for Puppeteer embedding
     let fontBase64 = ''
