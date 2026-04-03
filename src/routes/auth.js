@@ -9,6 +9,8 @@ import {
   getEffectivePlan,
   isTrialActive,
 } from '../utils/planService.js'
+import { getStripeClient } from '../utils/stripeBilling.js'
+import { syncAccountPlanFromStripe } from './billing.js'
 
 const router = Router()
 
@@ -16,6 +18,16 @@ const SALT_ROUNDS = 10
 
 /** Placeholder until user fills company_settings (not shown as real company name in PDF if empty snapshot). */
 const REGISTER_PLACEHOLDER_NAME = '-'
+
+async function syncStripePlanAfterLogin(accountId, email) {
+  try {
+    const stripe = getStripeClient()
+    if (!stripe) return
+    await syncAccountPlanFromStripe(pool, stripe, accountId, email)
+  } catch (e) {
+    console.warn('[auth] syncStripePlanAfterLogin:', e instanceof Error ? e.message : e)
+  }
+}
 
 function mapUserRow(row) {
   if (!row) return null
@@ -64,16 +76,24 @@ function mapAccountRowWithPlan(row) {
  * @param {string} email normalized
  * @param {string|null} passwordHash bcrypt hash or null for Google-only
  * @param {string|null} googleSub Google `sub` or null
- * @param {{ newAccountPlan?: 'free' | 'trial' }} [opts] Register uses `free` (default). New Google user uses `trial`.
+ * @param {{ newAccountPlan?: 'free' | 'trial' }} [opts] Default new account = `trial` + 7-day window; pass `free` for free-only signup.
  */
 async function insertNewTenantWithUser(client, email, passwordHash, googleSub, opts = {}) {
-  const planType = opts.newAccountPlan === 'trial' ? 'trial' : 'free'
-  const { rows: accRows } = await client.query(
-    `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
-     VALUES ($1, $2::text, NOW(), NOW() + INTERVAL '7 days')
-     RETURNING id`,
-    [REGISTER_PLACEHOLDER_NAME, planType],
-  )
+  const planType = opts.newAccountPlan === 'free' ? 'free' : 'trial'
+  const { rows: accRows } =
+    planType === 'trial'
+      ? await client.query(
+          `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
+           VALUES ($1, 'trial'::text, NOW(), NOW() + INTERVAL '7 days')
+           RETURNING id`,
+          [REGISTER_PLACEHOLDER_NAME],
+        )
+      : await client.query(
+          `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
+           VALUES ($1, 'free'::text, NULL, NULL)
+           RETURNING id`,
+          [REGISTER_PLACEHOLDER_NAME],
+        )
   const accountId = accRows[0].id
 
   const { rows: compRows } = await client.query(
@@ -180,12 +200,13 @@ router.post('/register', async (req, res) => {
 
     await client.query('COMMIT')
 
-    const account = mapAccountRowWithPlan(accountRows[0])
+    const billingRow = await fetchAccountBillingRow(pool, userRow.account_id)
+    const account = mapAccountRowWithPlan(billingRow ?? accountRows[0])
     const user = mapUserRow({ ...userRow, role: 'owner' })
     const token = signAuthToken({
       userId: userRow.id,
       companyId,
-      accountId,
+      accountId: userRow.account_id,
       email: userRow.email,
       role: 'owner',
     })
@@ -253,14 +274,9 @@ router.post('/login', async (req, res) => {
       }
     }
 
-    const { rows: accountRows } = await safeQuery(
-      pool,
-      `SELECT id, plan_type, trial_started_at, trial_ends_at, subscription_ends_at
-       FROM accounts
-       WHERE id = $1`,
-      [row.account_id],
-      { skipAssert: true },
-    )
+    await syncStripePlanAfterLogin(row.account_id, row.email)
+
+    const billingRow = await fetchAccountBillingRow(pool, row.account_id)
 
     const token = signAuthToken({
       userId: row.id,
@@ -275,7 +291,7 @@ router.post('/login', async (req, res) => {
       data: {
         token,
         user: mapUserRow({ ...row, role: 'owner' }),
-        account: mapAccountRowWithPlan(accountRows[0]),
+        account: mapAccountRowWithPlan(billingRow),
       },
     })
   } catch (err) {
@@ -383,16 +399,11 @@ router.post('/google', async (req, res) => {
         }
       }
 
-      const { rows: accountRows } = await safeQuery(
-        pool,
-        `SELECT id, plan_type, trial_started_at, trial_ends_at, subscription_ends_at
-         FROM accounts
-         WHERE id = $1`,
-        [row.account_id],
-        { skipAssert: true },
-      )
+      await syncStripePlanAfterLogin(row.account_id, row.email)
 
-      console.log('LOGIN USER PLAN:', accountRows[0]?.plan_type)
+      const billingRow = await fetchAccountBillingRow(pool, row.account_id)
+
+      console.log('LOGIN USER PLAN:', billingRow?.plan_type)
 
       const token = signAuthToken({
         userId: row.id,
@@ -407,7 +418,7 @@ router.post('/google', async (req, res) => {
         data: {
           token,
           user: mapUserRow({ ...row, role: 'owner' }),
-          account: mapAccountRowWithPlan(accountRows[0]),
+          account: mapAccountRowWithPlan(billingRow),
         },
       })
     }
@@ -425,7 +436,11 @@ router.post('/google', async (req, res) => {
       )
       await dbClient.query('COMMIT')
 
-      console.log('LOGIN USER PLAN:', accountRows[0]?.plan_type)
+      await syncStripePlanAfterLogin(userRow.account_id, userRow.email)
+
+      const billingRow = await fetchAccountBillingRow(pool, userRow.account_id)
+
+      console.log('LOGIN USER PLAN:', billingRow?.plan_type)
 
       const token = signAuthToken({
         userId: userRow.id,
@@ -440,7 +455,7 @@ router.post('/google', async (req, res) => {
         data: {
           token,
           user: mapUserRow({ ...userRow, role: 'owner' }),
-          account: mapAccountRowWithPlan(accountRows[0]),
+          account: mapAccountRowWithPlan(billingRow),
         },
       })
     } catch (signupErr) {

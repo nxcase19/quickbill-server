@@ -28,35 +28,17 @@ export async function fetchAccountBillingRow(pool, accountId) {
 }
 
 /**
- * Paid window: non-empty subscription_id and subscription_ends_at strictly in the future.
- * @param {object|null|undefined} account
- * @returns {boolean}
- */
-export function hasActiveSubscription(account) {
-  if (!account) return false
-  const sid = account.subscription_id
-  if (sid == null || String(sid).trim() === '') return false
-  const end = account.subscription_ends_at
-  if (end == null) return false
-  const t = new Date(end).getTime()
-  if (!Number.isFinite(t)) return false
-  return Date.now() < t
-}
-
-/**
  * @param {object|null|undefined} account
  * @returns {boolean}
  */
 export function isTrialActive(account) {
   if (!account) return false
-  const start = account.trial_started_at
-  const end = account.trial_ends_at
-  if (start == null || end == null) return false
-  const now = Date.now()
-  const t0 = new Date(start).getTime()
-  const t1 = new Date(end).getTime()
-  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return false
-  return now >= t0 && now < t1
+  const now = new Date()
+  if (String(account.plan_type ?? '').toLowerCase() !== 'trial') return false
+  if (!account.trial_ends_at) return false
+  const end = new Date(account.trial_ends_at)
+  if (Number.isNaN(end.getTime())) return false
+  return end > now
 }
 
 function normalizePlanType(raw) {
@@ -74,44 +56,55 @@ export function getStoredPlan(account) {
   return normalizePlanType(account.plan_type)
 }
 
-function paidTierWhileSubscribed(account) {
-  const stored = normalizePlanType(account.plan_type)
-  if (stored === 'basic' || stored === 'pro' || stored === 'business') return stored
-  return 'basic'
+function normalizePaidEffectivePlan(raw) {
+  const p = String(raw || 'pro').toLowerCase()
+  if (p === 'basic') return 'basic'
+  return 'pro'
+}
+
+function logPlanCheck(row, effective) {
+  console.log('[PLAN CHECK]', {
+    plan_type: row?.plan_type,
+    trial_ends_at: row?.trial_ends_at,
+    subscription_id: row?.subscription_id,
+    subscription_ends_at: row?.subscription_ends_at,
+    effective,
+  })
 }
 
 /**
- * Effective tier for UI + features.
- * - Active subscription → paid tier from plan_type (basic/pro/business), or basic if plan_type is inconsistent (never auto-upgrade).
- * - Else trial active → trial.
- * - Else → free.
- * plan_type alone never grants paid; subscription_id + subscription_ends_at do.
- * @param {object|null|undefined} account
+ * Effective tier: active trial (stored plan_type trial + trial_ends_at future) → then active subscription → else free.
+ * @param {object|null|undefined} row
  * @returns {'free'|'trial'|'basic'|'pro'}
  */
-export function getEffectivePlan(account) {
-  let eff
-  if (!account) {
-    eff = 'free'
-  } else if (hasActiveSubscription(account)) {
-    eff = paidTierWhileSubscribed(account)
-  } else if (isTrialActive(account)) {
-    eff = 'trial'
-  } else {
-    eff = 'free'
+export function getEffectivePlan(row) {
+  if (!row) {
+    return 'free'
   }
 
-  let normalized = String(eff || '').toLowerCase()
-  if (normalized.startsWith('pro')) normalized = 'pro'
-  else if (normalized.startsWith('business')) normalized = 'pro'
-  else if (normalized.startsWith('basic')) normalized = 'basic'
-  else if (normalized === 'trial') normalized = 'trial'
-  else normalized = 'free'
+  const now = new Date()
+  const planTypeRaw = String(row.plan_type ?? '').toLowerCase()
 
-  console.log('EFFECTIVE PLAN RAW:', eff)
-  console.log('EFFECTIVE PLAN NORMALIZED:', normalized)
+  if (planTypeRaw === 'trial' && row.trial_ends_at) {
+    const trialEnd = new Date(row.trial_ends_at)
+    if (!Number.isNaN(trialEnd.getTime()) && trialEnd > now) {
+      logPlanCheck(row, 'trial')
+      return 'trial'
+    }
+  }
 
-  return normalized
+  const subId = row.subscription_id != null && String(row.subscription_id).trim() !== ''
+  if (subId && row.subscription_ends_at) {
+    const subEnd = new Date(row.subscription_ends_at)
+    if (!Number.isNaN(subEnd.getTime()) && subEnd > now) {
+      const paid = normalizePaidEffectivePlan(row.plan_type || 'pro')
+      logPlanCheck(row, paid)
+      return paid
+    }
+  }
+
+  logPlanCheck(row, 'free')
+  return 'free'
 }
 
 /**
@@ -132,9 +125,7 @@ export function canUseFeature(account, feature) {
  * @param {object|null|undefined} account
  */
 export function shouldWatermarkFreePdf(account) {
-  if (!account) return false
-  if (isTrialActive(account)) return false
-  return getStoredPlan(account) === 'free'
+  return getEffectivePlan(account) === 'free'
 }
 
 export const FREE_PLAN_PDF_WATERMARK = 'สร้างด้วย QuickBill (Free Plan)'

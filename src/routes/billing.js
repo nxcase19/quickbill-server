@@ -246,7 +246,7 @@ async function applyStripeSubscriptionToAccount(pool, accountId, subscription) {
  * @param {string} accountId
  * @param {string} [email]
  */
-async function syncAccountPlanFromStripe(pool, stripe, accountId, email) {
+export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) {
   const row = await fetchAccountBillingRow(pool, accountId)
   if (!row) {
     return { ok: false, error: 'account_not_found' }
@@ -375,6 +375,7 @@ async function buildBillingPlanData(db, accountId) {
   }
 
   return {
+    plan: effectivePlan,
     planType: getStoredPlan(row),
     effectivePlan,
     trialActive,
