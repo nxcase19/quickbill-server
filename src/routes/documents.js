@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { v4 as uuidv4 } from 'uuid'
 import { Router } from 'express'
 import jwt from 'jsonwebtoken'
 import puppeteer from 'puppeteer'
@@ -752,7 +752,7 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
       }
 
       const orderId = Date.now().toString()
-      const groupId = randomUUID()
+      const groupId = uuidv4()
       const primaryType = docTypes.includes('INV') ? 'INV' : docTypes[0]
       const legacyCompanyId = legacyCompanyIdForInsert(req)
 
