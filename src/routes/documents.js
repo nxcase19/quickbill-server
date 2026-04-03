@@ -27,6 +27,53 @@ function legacyCompanyIdForInsert(req) {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * PRO: no cap. FREE: 3/day & 50/month by documents.created_at (req.user.plan is lowercase from JWT).
+ * @param {import('pg').PoolClient} client
+ * @param {string} accountId
+ * @param {string} [plan]
+ */
+async function checkDocumentLimit(client, accountId, plan) {
+  if (String(plan).toUpperCase() === 'PRO') return { allowed: true }
+  if (String(plan || 'FREE').toUpperCase() !== 'FREE') return { allowed: true }
+
+  const todayRes = await client.query(
+    `SELECT COUNT(*)
+     FROM documents
+     WHERE account_id = $1::uuid
+       AND created_at >= date_trunc('day', NOW())`,
+    [accountId],
+  )
+
+  const todayCount = parseInt(String(todayRes.rows[0]?.count ?? '0'), 10)
+
+  if (todayCount >= 3) {
+    return {
+      allowed: false,
+      message: 'คุณใช้ครบ 3 บิล/วันแล้ว (FREE)',
+    }
+  }
+
+  const monthRes = await client.query(
+    `SELECT COUNT(*)
+     FROM documents
+     WHERE account_id = $1::uuid
+       AND created_at >= date_trunc('month', NOW())`,
+    [accountId],
+  )
+
+  const monthCount = parseInt(String(monthRes.rows[0]?.count ?? '0'), 10)
+
+  if (monthCount >= 50) {
+    return {
+      allowed: false,
+      message: 'คุณใช้ครบ 50 บิล/เดือนแล้ว (FREE)',
+    }
+  }
+
+  return { allowed: true }
+}
+
 const router = Router()
 
 function docTypeToPrefix(dt) {
@@ -685,6 +732,19 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
       })
 
       await client.query('BEGIN')
+
+      const plan = req.user?.plan || 'FREE'
+      const limitAccountId = req.user?.account_id
+      const limitCheck = await checkDocumentLimit(client, limitAccountId ?? accountId, plan)
+
+      if (!limitCheck.allowed) {
+        await client.query('ROLLBACK')
+        return res.status(403).json({
+          success: false,
+          error: limitCheck.message,
+          upgrade: true,
+        })
+      }
 
       const orderId = Date.now().toString()
       const primaryType = docTypes.includes('INV') ? 'INV' : docTypes[0]
