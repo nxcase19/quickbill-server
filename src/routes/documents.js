@@ -28,14 +28,18 @@ function legacyCompanyIdForInsert(req) {
 }
 
 /**
- * PRO: no cap. FREE: 3/day & 50/month by documents.created_at (req.user.plan is lowercase from JWT).
+ * PRO: no cap. FREE & TRIAL: same 3/day & 50/month by documents.created_at (plan normalized to uppercase).
  * @param {import('pg').PoolClient} client
  * @param {string} accountId
  * @param {string} [plan]
  */
 async function checkDocumentLimit(client, accountId, plan) {
-  if (String(plan).toUpperCase() === 'PRO') return { allowed: true }
-  if (String(plan || 'FREE').toUpperCase() !== 'FREE') return { allowed: true }
+  const p = String(plan ?? '').toUpperCase()
+  if (p === 'PRO') return { allowed: true }
+
+  // TRIAL และ FREE ใช้ limit เหมือนกัน
+  const isFreeLike = p === 'FREE' || p === 'TRIAL'
+  if (!isFreeLike) return { allowed: true }
 
   const todayRes = await client.query(
     `SELECT COUNT(*)
