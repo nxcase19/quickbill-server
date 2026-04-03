@@ -358,6 +358,7 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
     const doc = document
     const company = buildCompanyForPdf(doc, fallbackCompany)
     applyPdfLogoBaseUrl(company)
+    company.plan = req.user?.plan || 'free'
     console.log('PDF FINAL COMPANY:', company)
 
     const kind = String(document.doc_type ?? 'INV').toUpperCase()

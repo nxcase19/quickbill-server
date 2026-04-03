@@ -3,6 +3,6 @@
  * @param {{ plan?: string }} company
  */
 export function pdfIsFreePlan(company) {
-  const isFree = company.plan !== 'pro'
+  const isFree = company.plan !== "pro"
   return isFree
 }

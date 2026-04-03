@@ -39,6 +39,8 @@ function formatMoneyPdf(n, locale) {
 export function renderDocument({ type, data, company, lang = 'th', watermarkText = '' }) {
   const companySafeRaw = company || {}
   const isFree = pdfIsFreePlan(companySafeRaw)
+  console.log('PDF PLAN:', company?.plan)
+  console.log('IS FREE:', isFree)
 
   const companySafe = {
     name_th:
@@ -420,9 +422,24 @@ export function renderDocument({ type, data, company, lang = 'th', watermarkText
       margin-top: 6px;
     }
 
+    .watermark {
+      position: fixed;
+      top: 40%;
+      left: 15%;
+      font-size: 70px;
+      color: rgba(0, 0, 0, 0.08);
+      transform: rotate(-30deg);
+      z-index: 9999;
+      pointer-events: none;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      white-space: nowrap;
+    }
+
   </style>
 </head>
 <body>
+  ${isFree ? '<div class="watermark">QuickBill FREE</div>' : ''}
   <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
     <div style="display:flex; gap:12px; align-items:flex-start;">
       ${
