@@ -328,25 +328,22 @@ export function renderDocument({ type, data, company, lang, watermarkText }) {
 
   let watermarkTier = null
 
+  // ✅ แสดงเฉพาะ FREE เท่านั้น
   if (planLower === 'free') {
     watermarkTier = 'FREE'
-  } else if (planLower === 'trial') {
-    watermarkTier = null // 🔥 TRIAL ไม่มี watermark
-  } else if (planLower === 'pro' || planLower === 'basic') {
+  } else {
     watermarkTier = null
-  } else if (watermarkText != null && String(watermarkText).trim() !== '') {
-    watermarkTier = 'FREE'
   }
 
   const watermarkLineEscaped = watermarkTier
     ? escapeHtml(`QuickBill ${watermarkTier}`)
     : ''
 
-  let watermarkOpacity = '0.06'
+  let watermarkOpacity = '0.104'
   let fontWeight = '500'
 
   if (watermarkTier === 'TRIAL') {
-    watermarkOpacity = '0.10'
+    watermarkOpacity = '0.169'
     fontWeight = '700'
   }
 
