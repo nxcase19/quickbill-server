@@ -326,6 +326,8 @@ router.post('/google', async (req, res) => {
     const email =
       payload.email != null ? String(payload.email).trim().toLowerCase() : ''
     const sub = payload.sub != null ? String(payload.sub).trim() : ''
+    const name =
+      payload.name != null ? String(payload.name).trim() : ''
     if (!email || !sub) {
       return res.status(401).json({ success: false, error: 'Invalid Google profile' })
     }
@@ -333,28 +335,45 @@ router.post('/google', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Google email is not verified' })
     }
 
-    console.log('Google user verified:', email)
+    console.log('Google user verified:', email, name || '')
 
-    const { rows: existing } = await safeQuery(
+    // STEP 1: existing Google link
+    const { rows: bySubRows } = await safeQuery(
       pool,
       `SELECT id, account_id, company_id, email, password_hash, google_sub
        FROM users
-       WHERE LOWER(TRIM(email)) = $1 OR (google_sub IS NOT NULL AND google_sub = $2)
-       LIMIT 1`,
-      [email, sub],
+       WHERE google_sub = $1`,
+      [sub],
       { skipAssert: true },
     )
+    let row = bySubRows[0] ?? null
 
-    if (existing.length > 0) {
-      const row = existing[0]
-      if (row.google_sub && String(row.google_sub) !== sub) {
+    // STEP 2: same email (e.g. registered with password first) — link google_sub, never change plan_type
+    if (!row) {
+      const { rows: byEmailRows } = await safeQuery(
+        pool,
+        `SELECT id, account_id, company_id, email, password_hash, google_sub
+         FROM users
+         WHERE LOWER(TRIM(email)) = $1`,
+        [email],
+        { skipAssert: true },
+      )
+      row = byEmailRows[0] ?? null
+    }
+
+    if (row) {
+      const existingSub = row.google_sub != null ? String(row.google_sub).trim() : ''
+      if (existingSub !== '' && existingSub !== sub) {
         return res.status(409).json({
           success: false,
           error: 'อีเมลนี้ผูกกับ Google อีกบัญชีแล้ว',
         })
       }
-      if (!row.google_sub) {
-        await pool.query(`UPDATE users SET google_sub = $1 WHERE id = $2`, [sub, row.id])
+      if (existingSub === '') {
+        await pool.query(
+          `UPDATE users SET google_sub = $1 WHERE LOWER(TRIM(email)) = $2`,
+          [sub, email],
+        )
       }
       try {
         await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [row.id])
@@ -372,6 +391,8 @@ router.post('/google', async (req, res) => {
         [row.account_id],
         { skipAssert: true },
       )
+
+      console.log('LOGIN USER PLAN:', accountRows[0]?.plan_type)
 
       const token = signAuthToken({
         userId: row.id,
@@ -403,6 +424,8 @@ router.post('/google', async (req, res) => {
         { newAccountPlan: 'trial' },
       )
       await dbClient.query('COMMIT')
+
+      console.log('LOGIN USER PLAN:', accountRows[0]?.plan_type)
 
       const token = signAuthToken({
         userId: userRow.id,
