@@ -13,7 +13,7 @@ import { renderDocument } from '../utils/documentTemplate.js'
 import { getCompany } from '../services/companyService.js'
 import { applyPdfLogoBaseUrl, buildCompanyForPdf } from '../utils/buildCompanyForPdf.js'
 import { assertCanCreateDocument } from '../middleware/planGuards.js'
-import { getPdfWatermarkText } from '../utils/planService.js'
+import { pdfIsFreePlan } from '../utils/pdfGenerator.js'
 import {
   FREE_DAILY_DOC_LIMIT,
   countDocumentsCreatedToday,
@@ -393,7 +393,7 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
         ? String(document.customer_tax_id).trim()
         : ''
 
-    const watermarkText = await getPdfWatermarkText(pool, accountId)
+    const watermarkText = pdfIsFreePlan(company) ? 'QuickBill FREE' : null
 
     // Load Thai font as base64 for Puppeteer embedding
     let fontBase64 = ''
