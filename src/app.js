@@ -17,41 +17,50 @@ import ocrRoutes from './routes/ocr.js'
 import suppliersRoutes from './routes/suppliers.js'
 import billingRoutes from './routes/billing.js'
 import { handleStripeWebhook } from './routes/billing.js'
+import { ALLOWED_ORIGINS, applyCorsHeaders } from './utils/corsHeaders.js'
 
 const app = express()
 
-// CORS must be before all routes (including auth + preflight)
+// CORS first — before express.json(), routes, webhooks
 const corsOptions = {
-  origin: [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'https://quickbill-web.vercel.app',
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin(origin, callback) {
+    if (!origin) {
+      return callback(null, true)
+    }
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true)
+    }
+    callback(null, false)
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+  optionsSuccessStatus: 200,
+  preflightContinue: true,
 }
 
 app.use(cors(corsOptions))
-app.options('*', cors(corsOptions))
+
+// Finish browser preflight after cors attaches headers
+app.options('*', (req, res) => {
+  applyCorsHeaders(req, res)
+  res.sendStatus(200)
+})
 
 app.use((req, res, next) => {
   console.log('Incoming request:', req.method, req.path)
   next()
 })
 
-// 🔥 MUST BE FIRST (Stripe webhook uses raw body)
 app.post(
   '/api/billing/webhook',
   express.raw({ type: 'application/json' }),
   handleStripeWebhook,
 )
 
-// ❗ แล้วค่อยมี
 app.use(express.json())
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')))
 
-// Public health checks (no auth required)
 app.get('/health', (req, res) => {
   res.json({ ok: true })
 })
@@ -64,9 +73,6 @@ app.get('/api/test', (req, res) => {
   res.json({ ok: true })
 })
 
-// Route policy:
-// - Public: /api/auth/* (login, register) — no auth middleware
-// - Protected: selected /api/* — require Bearer JWT via authMiddleware
 app.use('/api/auth', authRoutes)
 app.use('/api/billing', authMiddleware, billingRoutes)
 app.use('/api/customers', authMiddleware, customersRoutes)
@@ -86,6 +92,7 @@ app.use('/api/ocr', authMiddleware, ocrRoutes)
 app.use('/api/suppliers', authMiddleware, suppliersRoutes)
 
 app.use((err, req, res, next) => {
+  applyCorsHeaders(req, res)
   console.error('GLOBAL ERROR:', err)
   res.status(500).json({
     success: false,
