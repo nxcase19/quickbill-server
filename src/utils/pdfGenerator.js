@@ -1,8 +1,7 @@
 /**
- * PDF tier: free vs pro (company.plan from billing / caller).
+ * Watermark only on free plan (company.plan from getCompany / billing).
  * @param {{ plan?: string }} company
  */
 export function pdfIsFreePlan(company) {
-  const isFree = company.plan !== "pro"
-  return isFree
+  return String(company?.plan ?? '').toLowerCase() === 'free'
 }

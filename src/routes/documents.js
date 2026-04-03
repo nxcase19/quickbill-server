@@ -29,18 +29,18 @@ function legacyCompanyIdForInsert(req) {
 }
 
 /**
- * PRO: no cap. FREE & TRIAL: same 3/day & 50/month by documents.created_at (plan normalized to uppercase).
+ * Document caps: ONLY free plan (3/day, 50/month by created_at). Trial & paid → no cap.
  * @param {import('pg').PoolClient} client
  * @param {string} accountId
  * @param {string} [plan]
  */
 async function checkDocumentLimit(client, accountId, plan) {
-  const p = String(plan ?? '').toUpperCase()
-  if (p === 'PRO') return { allowed: true }
+  const planNorm = String(plan ?? '').toLowerCase()
+  const isFreePlan = planNorm === 'free'
 
-  // TRIAL และ FREE ใช้ limit เหมือนกัน
-  const isFreeLike = p === 'FREE' || p === 'TRIAL'
-  if (!isFreeLike) return { allowed: true }
+  if (!isFreePlan) {
+    return { allowed: true }
+  }
 
   const todayRes = await client.query(
     `SELECT COUNT(DISTINCT group_id)
@@ -52,13 +52,6 @@ async function checkDocumentLimit(client, accountId, plan) {
 
   const todayCount = parseInt(String(todayRes.rows[0]?.count ?? '0'), 10)
 
-  if (todayCount >= 3) {
-    return {
-      allowed: false,
-      message: 'คุณใช้ครบ 3 บิล/วันแล้ว (FREE)',
-    }
-  }
-
   const monthRes = await client.query(
     `SELECT COUNT(DISTINCT group_id)
      FROM documents
@@ -69,9 +62,24 @@ async function checkDocumentLimit(client, accountId, plan) {
 
   const monthCount = parseInt(String(monthRes.rows[0]?.count ?? '0'), 10)
 
+  console.log('USAGE PLAN CHECK:', {
+    plan: planNorm,
+    dailyCount: todayCount,
+    monthlyCount: monthCount,
+  })
+
+  if (todayCount >= 3) {
+    return {
+      allowed: false,
+      code: 'FREE_LIMIT_DAILY',
+      message: 'คุณใช้ครบ 3 บิล/วันแล้ว (FREE)',
+    }
+  }
+
   if (monthCount >= 50) {
     return {
       allowed: false,
+      code: 'FREE_LIMIT_MONTHLY',
       message: 'คุณใช้ครบ 50 บิล/เดือนแล้ว (FREE)',
     }
   }
@@ -231,10 +239,10 @@ router.get('/usage/today', async (req, res) => {
     } catch {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-    const isTrial = req.user?.is_trial_active === true
     const plan = String(req.user?.plan || 'free').toLowerCase()
+    const isFreePlan = plan === 'free'
     const count = await countDocumentsCreatedToday(pool, accountId)
-    const limit = !isTrial && plan === 'free' ? FREE_DAILY_DOC_LIMIT : null
+    const limit = isFreePlan ? FREE_DAILY_DOC_LIMIT : null
     return res.json({
       success: true,
       data: { count, limit },
@@ -255,8 +263,8 @@ router.get('/usage', async (req, res) => {
 
   const client = await pool.connect()
   try {
-    const plan = req.user?.plan || 'FREE'
-    const planUpper = String(plan).toUpperCase()
+    const plan = String(req.user?.plan || 'free').toLowerCase()
+    const isFreePlan = plan === 'free'
 
     const todayRes = await client.query(
       `SELECT COUNT(DISTINCT group_id) AS count
@@ -282,11 +290,11 @@ router.get('/usage', async (req, res) => {
       plan,
       today: {
         used: todayCount,
-        limit: planUpper === 'PRO' ? null : 3,
+        limit: isFreePlan ? 3 : null,
       },
       month: {
         used: monthCount,
-        limit: planUpper === 'PRO' ? null : 50,
+        limit: isFreePlan ? 50 : null,
       },
     })
   } catch (err) {
@@ -680,7 +688,7 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
     }
 
     const plan = String(req.user?.plan || 'free').toLowerCase()
-    const isTrial = req.user?.is_trial_active === true
+    const isFreePlan = plan === 'free'
 
     const countResult = await safeQuery(
       pool,
@@ -702,15 +710,18 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
     }
     const pendingDocs = docTypes.length
 
-    if (
-      !isTrial &&
-      plan === 'free' &&
-      todayCount + pendingDocs > FREE_DAILY_DOC_LIMIT
-    ) {
+    console.log('USAGE PLAN CHECK:', {
+      plan,
+      dailyCount: todayCount,
+      monthlyCount: null,
+    })
+
+    if (isFreePlan && todayCount + pendingDocs > FREE_DAILY_DOC_LIMIT) {
       return res.status(403).json({
         success: false,
-        code: 'LIMIT_REACHED',
-        error: 'คุณใช้ครบ 3 เอกสารต่อวันแล้ว กรุณาอัปเกรดแพ็กเกจ',
+        code: 'FREE_LIMIT_DAILY',
+        error: 'FREE_LIMIT_DAILY',
+        message: 'คุณใช้ครบ 3 บิล/วันแล้ว (FREE)',
       })
     }
 
@@ -814,15 +825,17 @@ router.post('/', assertCanCreateDocument, async (req, res) => {
 
       await client.query('BEGIN')
 
-      const plan = req.user?.plan || 'FREE'
+      const planForLimit = String(req.user?.plan || 'free').toLowerCase()
       const limitAccountId = req.user?.account_id
-      const limitCheck = await checkDocumentLimit(client, limitAccountId ?? accountId, plan)
+      const limitCheck = await checkDocumentLimit(client, limitAccountId ?? accountId, planForLimit)
 
       if (!limitCheck.allowed) {
         await client.query('ROLLBACK')
         return res.status(403).json({
           success: false,
-          error: limitCheck.message,
+          code: limitCheck.code ?? 'LIMIT_REACHED',
+          error: limitCheck.code ?? 'LIMIT_REACHED',
+          message: limitCheck.message,
           upgrade: true,
         })
       }
