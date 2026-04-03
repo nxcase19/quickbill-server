@@ -359,11 +359,10 @@ ${Array(12)
     align-items: center;
     justify-content: center;
     font-size: 55px;
-    opacity: 0.06;
-    color: #000;
+    color: rgba(0,0,0,0.03);
     transform: rotate(-30deg);
-    font-weight: 700;
-    letter-spacing: 4px;
+    font-weight: 500;
+    letter-spacing: 2px;
   ">
     ${watermarkLineEscaped}
   </div>`,
