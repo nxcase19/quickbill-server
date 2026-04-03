@@ -5,7 +5,7 @@
 
 import { safeQuery } from './tenantQuery.js'
 
-export const PLAN_TYPES = Object.freeze(['free', 'basic', 'pro', 'business'])
+export const PLAN_TYPES = Object.freeze(['free', 'trial', 'basic', 'pro', 'business'])
 
 /** @typedef {'export'|'purchase_orders'|'tax_purchase'} BillingFeature */
 
@@ -66,7 +66,7 @@ function normalizePlanType(raw) {
 /**
  * Raw stored plan_type (labels / watermark); does not imply paid access.
  * @param {object|null|undefined} account
- * @returns {'free'|'basic'|'pro'|'business'}
+ * @returns {'free'|'trial'|'basic'|'pro'|'business'}
  */
 export function getStoredPlan(account) {
   if (!account) return 'free'

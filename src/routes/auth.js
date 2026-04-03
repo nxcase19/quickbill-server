@@ -64,13 +64,15 @@ function mapAccountRowWithPlan(row) {
  * @param {string} email normalized
  * @param {string|null} passwordHash bcrypt hash or null for Google-only
  * @param {string|null} googleSub Google `sub` or null
+ * @param {{ newAccountPlan?: 'free' | 'trial' }} [opts] Register uses `free` (default). New Google user uses `trial`.
  */
-async function insertNewTenantWithUser(client, email, passwordHash, googleSub) {
+async function insertNewTenantWithUser(client, email, passwordHash, googleSub, opts = {}) {
+  const planType = opts.newAccountPlan === 'trial' ? 'trial' : 'free'
   const { rows: accRows } = await client.query(
     `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
-     VALUES ($1, 'free', NOW(), NOW() + INTERVAL '7 days')
+     VALUES ($1, $2::text, NOW(), NOW() + INTERVAL '7 days')
      RETURNING id`,
-    [REGISTER_PLACEHOLDER_NAME],
+    [REGISTER_PLACEHOLDER_NAME, planType],
   )
   const accountId = accRows[0].id
 
@@ -392,11 +394,13 @@ router.post('/google', async (req, res) => {
     const dbClient = await pool.connect()
     try {
       await dbClient.query('BEGIN')
+      console.log('NEW USER → START TRIAL 7 DAYS')
       const { userRow, companyId, accountRows } = await insertNewTenantWithUser(
         dbClient,
         email,
         null,
         sub,
+        { newAccountPlan: 'trial' },
       )
       await dbClient.query('COMMIT')
 
