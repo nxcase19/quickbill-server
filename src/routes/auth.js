@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
+import { OAuth2Client } from 'google-auth-library'
 import { pool } from '../db.js'
 import { safeQuery } from '../utils/tenantQuery.js'
 import { signAuthToken, verifyAuthToken } from '../utils/authToken.js'
@@ -56,6 +57,45 @@ function mapAccountRowWithPlan(row) {
   else if (eff === 'trial') plan = 'trial'
   else plan = 'free'
   return { ...base, plan }
+}
+
+/**
+ * @param {import('pg').PoolClient} client
+ * @param {string} email normalized
+ * @param {string|null} passwordHash bcrypt hash or null for Google-only
+ * @param {string|null} googleSub Google `sub` or null
+ */
+async function insertNewTenantWithUser(client, email, passwordHash, googleSub) {
+  const { rows: accRows } = await client.query(
+    `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
+     VALUES ($1, 'free', NOW(), NOW() + INTERVAL '7 days')
+     RETURNING id`,
+    [REGISTER_PLACEHOLDER_NAME],
+  )
+  const accountId = accRows[0].id
+
+  const { rows: compRows } = await client.query(
+    `INSERT INTO companies (account_id, name) VALUES ($1, $2) RETURNING id`,
+    [accountId, REGISTER_PLACEHOLDER_NAME],
+  )
+  const companyId = compRows[0].id
+
+  const { rows: userRows } = await client.query(
+    `INSERT INTO users (account_id, company_id, email, password_hash, google_sub)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, email, account_id, company_id`,
+    [accountId, companyId, email, passwordHash, googleSub],
+  )
+  const userRow = userRows[0]
+
+  const { rows: accountRows } = await client.query(
+    `SELECT id, plan_type, trial_started_at, trial_ends_at, subscription_ends_at
+     FROM accounts
+     WHERE id = $1`,
+    [accountId],
+  )
+
+  return { userRow, companyId, accountRows }
 }
 
 router.get('/me', async (req, res) => {
@@ -129,33 +169,11 @@ router.post('/register', async (req, res) => {
     await client.query('BEGIN')
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
 
-    const { rows: accRows } = await client.query(
-      `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
-       VALUES ($1, 'free', NOW(), NOW() + INTERVAL '7 days')
-       RETURNING id`,
-      [REGISTER_PLACEHOLDER_NAME],
-    )
-    const accountId = accRows[0].id
-
-    const { rows: compRows } = await client.query(
-      `INSERT INTO companies (account_id, name) VALUES ($1, $2) RETURNING id`,
-      [accountId, REGISTER_PLACEHOLDER_NAME],
-    )
-    const companyId = compRows[0].id
-
-    const { rows: userRows } = await client.query(
-      `INSERT INTO users (account_id, company_id, email, password_hash)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, email, account_id, company_id`,
-      [accountId, companyId, email, passwordHash],
-    )
-    const userRow = userRows[0]
-
-    const { rows: accountRows } = await client.query(
-      `SELECT id, plan_type, trial_started_at, trial_ends_at, subscription_ends_at
-       FROM accounts
-       WHERE id = $1`,
-      [accountId],
+    const { userRow, companyId, accountRows } = await insertNewTenantWithUser(
+      client,
+      email,
+      passwordHash,
+      null,
     )
 
     await client.query('COMMIT')
@@ -212,6 +230,12 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid email or password' })
     }
     const row = rows[0]
+    if (row.password_hash == null || String(row.password_hash).trim() === '') {
+      return res.status(401).json({
+        success: false,
+        error: 'บัญชีนี้เข้าสู่ระบบด้วย Google — กรุณาใช้ปุ่มเข้าสู่ระบบด้วย Google',
+      })
+    }
     const ok = await bcrypt.compare(password, row.password_hash)
     if (!ok) {
       return res.status(401).json({ success: false, error: 'Invalid email or password' })
@@ -254,6 +278,145 @@ router.post('/login', async (req, res) => {
     })
   } catch (err) {
     console.error('POST /login error:', err)
+    return res.status(500).json({ success: false, error: 'Internal server error' })
+  }
+})
+
+router.post('/google', async (req, res) => {
+  const idTokenRaw = req.body?.token ?? req.body?.credential
+  const idToken = idTokenRaw != null ? String(idTokenRaw).trim() : ''
+  if (!idToken) {
+    return res.status(400).json({ success: false, error: 'token is required' })
+  }
+
+  const googleClientId = process.env.GOOGLE_CLIENT_ID != null ? String(process.env.GOOGLE_CLIENT_ID).trim() : ''
+  if (!googleClientId) {
+    return res.status(503).json({ success: false, error: 'Google sign-in is not configured' })
+  }
+
+  let payload
+  try {
+    const oAuth = new OAuth2Client(googleClientId)
+    const ticket = await oAuth.verifyIdToken({
+      idToken,
+      audience: googleClientId,
+    })
+    payload = ticket.getPayload()
+  } catch (err) {
+    console.error('POST /auth/google verify:', err)
+    return res.status(401).json({ success: false, error: 'Invalid Google token' })
+  }
+
+  if (!payload) {
+    return res.status(401).json({ success: false, error: 'Invalid Google token' })
+  }
+
+  const email =
+    payload.email != null ? String(payload.email).trim().toLowerCase() : ''
+  const sub = payload.sub != null ? String(payload.sub).trim() : ''
+  if (!email || !sub) {
+    return res.status(401).json({ success: false, error: 'Invalid Google profile' })
+  }
+  if (payload.email_verified === false) {
+    return res.status(401).json({ success: false, error: 'Google email is not verified' })
+  }
+
+  try {
+    const { rows: existing } = await safeQuery(
+      pool,
+      `SELECT id, account_id, company_id, email, password_hash, google_sub
+       FROM users
+       WHERE LOWER(TRIM(email)) = $1 OR (google_sub IS NOT NULL AND google_sub = $2)
+       LIMIT 1`,
+      [email, sub],
+      { skipAssert: true },
+    )
+
+    if (existing.length > 0) {
+      const row = existing[0]
+      if (row.google_sub && String(row.google_sub) !== sub) {
+        return res.status(409).json({
+          success: false,
+          error: 'อีเมลนี้ผูกกับ Google อีกบัญชีแล้ว',
+        })
+      }
+      if (!row.google_sub) {
+        await pool.query(`UPDATE users SET google_sub = $1 WHERE id = $2`, [sub, row.id])
+      }
+      try {
+        await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [row.id])
+      } catch (e) {
+        if (e && e.code !== '42703') {
+          throw e
+        }
+      }
+
+      const { rows: accountRows } = await safeQuery(
+        pool,
+        `SELECT id, plan_type, trial_started_at, trial_ends_at, subscription_ends_at
+         FROM accounts
+         WHERE id = $1`,
+        [row.account_id],
+        { skipAssert: true },
+      )
+
+      const token = signAuthToken({
+        userId: row.id,
+        companyId: row.company_id,
+        accountId: row.account_id,
+        email: row.email,
+        role: 'owner',
+      })
+
+      return res.json({
+        success: true,
+        data: {
+          token,
+          user: mapUserRow({ ...row, role: 'owner' }),
+          account: mapAccountRowWithPlan(accountRows[0]),
+        },
+      })
+    }
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { userRow, companyId, accountRows } = await insertNewTenantWithUser(
+        client,
+        email,
+        null,
+        sub,
+      )
+      await client.query('COMMIT')
+
+      const token = signAuthToken({
+        userId: userRow.id,
+        companyId,
+        accountId: userRow.account_id,
+        email: userRow.email,
+        role: 'owner',
+      })
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          token,
+          user: mapUserRow({ ...userRow, role: 'owner' }),
+          account: mapAccountRowWithPlan(accountRows[0]),
+        },
+      })
+    } catch (err) {
+      await client.query('ROLLBACK')
+      if (err.code === '23505') {
+        return res.status(409).json({ success: false, error: 'Email already registered' })
+      }
+      console.error('POST /auth/google signup:', err)
+      return res.status(500).json({ success: false, error: 'Internal server error' })
+    } finally {
+      client.release()
+    }
+  } catch (err) {
+    console.error('POST /auth/google error:', err)
     return res.status(500).json({ success: false, error: 'Internal server error' })
   }
 })
