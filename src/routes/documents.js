@@ -360,10 +360,6 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
 
     const finalCompany = {
       ...company,
-      name_th: snapshot.name_th || company.name_th,
-      address: snapshot.address || company.address,
-      phone: snapshot.phone || company.phone,
-      tax_id: snapshot.tax_id || company.tax_id,
     }
 
     applyPdfLogoBaseUrl(finalCompany)
