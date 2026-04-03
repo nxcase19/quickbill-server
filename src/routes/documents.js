@@ -358,8 +358,22 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
     const doc = document
     const company = buildCompanyForPdf(doc, fallbackCompany)
     applyPdfLogoBaseUrl(company)
-    company.plan = req.user?.plan || 'free'
-    console.log('PDF FINAL COMPANY:', company)
+
+    const { rows: userRows } = await safeQuery(
+      pool,
+      `SELECT plan FROM users WHERE account_id = $1::uuid LIMIT 1`,
+      [accountId],
+    )
+
+    const dbPlan = userRows[0]?.plan || 'free'
+
+    console.log('PDF PLAN FROM DB:', dbPlan)
+
+    const companyWithPlan = {
+      ...company,
+      plan: dbPlan,
+    }
+    console.log('PDF FINAL COMPANY:', companyWithPlan)
 
     const kind = String(document.doc_type ?? 'INV').toUpperCase()
     const typeMap = {
@@ -393,9 +407,9 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
         ? String(document.customer_tax_id).trim()
         : ''
 
-    const watermarkText = pdfIsFreePlan(company) ? 'QuickBill FREE' : null
+    const watermarkText = pdfIsFreePlan(companyWithPlan) ? 'QuickBill FREE' : null
     console.log("WATERMARK DEBUG:", {
-      plan: company.plan,
+      plan: companyWithPlan.plan,
       watermarkText,
     })
 
@@ -425,9 +439,8 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
         show_vat_line: showVatLine,
         vat_type: docVatType,
       },
-      company,
+      company: companyWithPlan,
       lang: 'th',
-      watermarkText,
     })
 
     const html = fontBase64
