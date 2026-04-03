@@ -420,24 +420,51 @@ export function renderDocument({ type, data, company, lang, watermarkText }) {
       margin-top: 6px;
     }
 
-    .watermark {
-      position: fixed;
-      top: 40%;
-      left: 15%;
-      font-size: 70px;
-      color: rgba(0,0,0,0.08);
-      transform: rotate(-30deg);
-      z-index: 9999;
-      pointer-events: none;
-    }
-
   </style>
 </head>
 <body>
   ${
     wmTrim
       ? `
-<div class="watermark">${escapeHtml(wmTrim)}</div>
+<div style="
+position: fixed;
+top: 50%;
+left: 50%;
+transform: translate(-50%, -50%) rotate(-30deg);
+font-size: 120px;
+color: rgba(0,0,0,0.06);
+white-space: nowrap;
+z-index: 9999;
+pointer-events: none;
+">
+${escapeHtml(wmTrim)}
+</div>
+
+<div style="
+position: fixed;
+top: 20%;
+left: 20%;
+transform: rotate(-30deg);
+font-size: 80px;
+color: rgba(0,0,0,0.05);
+z-index: 9999;
+pointer-events: none;
+">
+${escapeHtml(wmTrim)}
+</div>
+
+<div style="
+position: fixed;
+bottom: 20%;
+right: 15%;
+transform: rotate(-30deg);
+font-size: 80px;
+color: rgba(0,0,0,0.05);
+z-index: 9999;
+pointer-events: none;
+">
+${escapeHtml(wmTrim)}
+</div>
 `
       : ''
   }
