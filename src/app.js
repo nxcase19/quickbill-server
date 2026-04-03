@@ -17,38 +17,45 @@ import ocrRoutes from './routes/ocr.js'
 import suppliersRoutes from './routes/suppliers.js'
 import billingRoutes from './routes/billing.js'
 import { handleStripeWebhook } from './routes/billing.js'
-import { ALLOWED_ORIGINS, applyCorsHeaders } from './utils/corsHeaders.js'
 
 const app = express()
 
-// CORS first — before express.json(), routes, webhooks
-const corsOptions = {
-  origin(origin, callback) {
-    if (!origin) {
-      return callback(null, true)
-    }
-    if (ALLOWED_ORIGINS.includes(origin)) {
-      return callback(null, true)
-    }
-    callback(null, false)
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
-  optionsSuccessStatus: 200,
-  preflightContinue: true,
-}
+/** Allowed browser origins (credentialed requests require exact match). */
+const CORS_ORIGINS = [
+  'https://quickbill.dev',
+  'https://quickbill-web.vercel.app',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]
 
-app.use(cors(corsOptions))
+/**
+ * Diagnostic only: set CORS_DIAGNOSTIC=true on the server to allow any Origin
+ * (uses origin: true — works with credentials). Do not use long-term in production.
+ * Note: origin: '*' cannot be used with credentials: true (browser will block).
+ */
+const corsDiagnostic = process.env.CORS_DIAGNOSTIC === 'true'
 
-// Finish browser preflight after cors attaches headers
-app.options('*', (req, res) => {
-  applyCorsHeaders(req, res)
-  res.sendStatus(200)
-})
+// FIRST middleware — before express.json(), routes, webhooks, everything
+app.use(
+  cors(
+    corsDiagnostic
+      ? {
+          origin: true,
+          credentials: true,
+          methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+          allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
+        }
+      : {
+          origin: CORS_ORIGINS,
+          credentials: true,
+          methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+          allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
+        },
+  ),
+)
 
 app.use((req, res, next) => {
-  console.log('Incoming request:', req.method, req.path)
+  console.log('REQ:', req.method, req.path)
   next()
 })
 
@@ -92,7 +99,6 @@ app.use('/api/ocr', authMiddleware, ocrRoutes)
 app.use('/api/suppliers', authMiddleware, suppliersRoutes)
 
 app.use((err, req, res, next) => {
-  applyCorsHeaders(req, res)
   console.error('GLOBAL ERROR:', err)
   res.status(500).json({
     success: false,
