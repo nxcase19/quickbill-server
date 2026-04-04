@@ -42,16 +42,27 @@ router.get('/summary', async (req, res) => {
     const tw = buildTenantWhereClause(req, 'd', 1)
     const params = [tw.param]
 
+    const docEffectiveDate = `COALESCE(d.doc_date, (d.created_at)::date)`
+
     if (period === 'day') {
-      dateFilter = `AND d.doc_date = CURRENT_DATE`
+      dateFilter = `AND ${docEffectiveDate} = CURRENT_DATE`
     } else if (period === 'month') {
-      dateFilter = `AND date_trunc('month', d.doc_date) = date_trunc('month', CURRENT_DATE)`
+      dateFilter = `AND date_trunc('month', ${docEffectiveDate}) = date_trunc('month', CURRENT_DATE)`
     } else if (period === 'year') {
-      dateFilter = `AND date_trunc('year', d.doc_date) = date_trunc('year', CURRENT_DATE)`
+      dateFilter = `AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
     } else if (from && to) {
       params.push(from, to)
-      dateFilter = `AND d.doc_date BETWEEN $2 AND $3`
+      dateFilter = `AND ${docEffectiveDate} BETWEEN $2::date AND $3::date`
     }
+
+    const countSql = `SELECT COUNT(*)::int AS n FROM documents d WHERE ${tw.clause} ${dateFilter}`
+    const { rows: countRows } = await safeQuery(pool, countSql, params)
+    console.log('[reports/summary] debug row count', {
+      period: period ?? null,
+      from: from ?? null,
+      to: to ?? null,
+      matching_documents: countRows[0]?.n ?? null,
+    })
 
     const { rows } = await safeQuery(
       pool,
@@ -61,7 +72,7 @@ router.get('/summary', async (req, res) => {
             CASE
               WHEN d.doc_type = 'INV'
                 AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND COALESCE(d.status, '') <> 'cancelled'
+                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
               THEN d.total
               ELSE 0
             END
@@ -73,8 +84,8 @@ router.get('/summary', async (req, res) => {
             CASE
               WHEN d.doc_type = 'INV'
                 AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND COALESCE(d.status, '') <> 'cancelled'
-                AND d.status = 'paid'
+                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
+                AND LOWER(TRIM(COALESCE(d.status::text, ''))) = 'paid'
               THEN d.total
               ELSE 0
             END
@@ -86,8 +97,8 @@ router.get('/summary', async (req, res) => {
             CASE
               WHEN d.doc_type = 'INV'
                 AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND COALESCE(d.status, '') <> 'cancelled'
-                AND d.status <> 'paid'
+                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
+                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'paid'
               THEN d.total
               ELSE 0
             END
