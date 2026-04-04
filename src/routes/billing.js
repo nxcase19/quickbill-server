@@ -462,61 +462,28 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
   }
 }
 
-/** Read-only fallback for GET /plan fatal errors — does not imply user is on free tier. */
-const PLAN_READ_FALLBACK_DATA = {
-  plan: 'unknown',
-  planType: 'unknown',
-  effectivePlan: 'unknown',
-  trialActive: false,
-  trialEndsAt: null,
-  subscriptionEndsAt: null,
-  cancelAtPeriodEnd: false,
-  features: {},
-  limits: {},
-}
-
 /**
  * Pure read: DB row + getEffectivePlan only. No Stripe, no writes, no usage queries.
+ * Single try/catch — always sends JSON (never hang or exit without response).
  */
 router.get('/plan', async (req, res) => {
   try {
-    let accountId
-    try {
-      accountId = requireAccountId(req)
-    } catch {
-      return res.status(401).json({ success: false, error: 'Unauthorized' })
-    }
+    const accountId = requireAccountId(req)
 
-    let row = null
-    try {
-      row = await fetchAccountBillingRow(pool, accountId)
-    } catch (err) {
-      console.error('BILLING PLAN ERROR:', err)
-    }
-
-    let effective = 'free'
-    try {
-      effective = getEffectivePlan(row)
-    } catch (err) {
-      console.error('BILLING PLAN ERROR:', err)
-    }
+    const row = await fetchAccountBillingRow(pool, accountId)
+    const effective = getEffectivePlan(row)
 
     const raw = row?.plan_type ?? 'free'
     const lower = String(raw).toLowerCase()
 
     let stored = 'free'
-    if (lower.startsWith('pro')) stored = 'pro'
-    else if (lower.startsWith('business')) stored = 'pro'
+    if (lower.startsWith('pro') || lower.startsWith('business')) stored = 'pro'
     else if (lower.startsWith('basic')) stored = 'basic'
     else if (lower === 'trial') stored = 'trial'
 
-    console.log('[PLAN API]', {
-      accountId,
-      stored,
-      effective,
-    })
+    console.log('[PLAN API OK]', { accountId, stored, effective })
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       data: {
         plan: stored,
@@ -531,10 +498,15 @@ router.get('/plan', async (req, res) => {
       },
     })
   } catch (err) {
-    console.error('BILLING PLAN ERROR:', err)
-    return res.json({
-      success: true,
-      data: { ...PLAN_READ_FALLBACK_DATA },
+    console.error('[PLAN API ERROR]', err)
+    if (res.headersSent) return
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg === 'Missing account_id') {
+      return res.status(401).json({ success: false, error: 'Unauthorized' })
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Plan fetch failed',
     })
   }
 })
