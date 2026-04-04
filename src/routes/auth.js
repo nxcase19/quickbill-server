@@ -63,24 +63,14 @@ function mapAccountRowWithPlan(row) {
  * @param {string} email normalized
  * @param {string|null} passwordHash bcrypt hash or null for Google-only
  * @param {string|null} googleSub Google `sub` or null
- * @param {{ newAccountPlan?: 'free' | 'trial' }} [opts] Default new account = `trial` + 7-day window; pass `free` for free-only signup.
  */
-async function insertNewTenantWithUser(client, email, passwordHash, googleSub, opts = {}) {
-  const planType = opts.newAccountPlan === 'free' ? 'free' : 'trial'
-  const { rows: accRows } =
-    planType === 'trial'
-      ? await client.query(
-          `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
-           VALUES ($1, 'trial'::text, NOW(), NOW() + INTERVAL '7 days')
-           RETURNING id`,
-          [REGISTER_PLACEHOLDER_NAME],
-        )
-      : await client.query(
-          `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
-           VALUES ($1, 'free'::text, NULL, NULL)
-           RETURNING id`,
-          [REGISTER_PLACEHOLDER_NAME],
-        )
+async function insertNewTenantWithUser(client, email, passwordHash, googleSub) {
+  const { rows: accRows } = await client.query(
+    `INSERT INTO accounts (name, plan_type, trial_started_at, trial_ends_at)
+     VALUES ($1, 'trial'::text, NOW(), NOW() + INTERVAL '7 days')
+     RETURNING id`,
+    [REGISTER_PLACEHOLDER_NAME],
+  )
   const accountId = accRows[0].id
 
   const { rows: compRows } = await client.query(
@@ -415,7 +405,6 @@ router.post('/google', async (req, res) => {
         email,
         null,
         sub,
-        { newAccountPlan: 'trial' },
       )
       await dbClient.query('COMMIT')
 

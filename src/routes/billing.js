@@ -184,72 +184,92 @@ function pickBestStripeSubscription(subs) {
  * @returns {Promise<{ applied: boolean, downgraded?: boolean, effectivePlan?: string, storedPlan?: string, reason?: string }>}
  */
 async function applyStripeSubscriptionToAccount(pool, accountId, subscription) {
-  const subscriptionIdStr = normalizeString(subscription.id)
-  const priceId = normalizeString(subscription.items?.data?.[0]?.price?.id)
-  const metaPlan = normalizeString(subscription.metadata?.plan_type)
-  let planType = resolvePlanFromPriceAndMetadata(priceId, metaPlan || undefined)
-  if (!planType) {
-    const envBasic = normalizeString(process.env.STRIPE_PRICE_BASIC)
-    const envPro = normalizeString(process.env.STRIPE_PRICE_PRO)
-    const envBusiness = normalizeString(process.env.STRIPE_PRICE_BUSINESS)
-    if (priceId && envBasic && priceId === envBasic) planType = 'basic'
-    if (priceId && envPro && priceId === envPro) planType = 'pro'
-    if (priceId && envBusiness && priceId === envBusiness) planType = 'business'
+  if (!subscription || !subscription.status) {
+    console.warn('INVALID SUBSCRIPTION — skip update', { account_id: accountId })
+    return { applied: false, reason: 'invalid_subscription' }
   }
 
-  const status = String(subscription.status || '').toLowerCase()
-  if (status === 'canceled' || status === 'incomplete_expired') {
-    await downgradeAccountAfterSubscriptionRemoved(pool, accountId)
+  try {
+    const subscriptionIdStr = normalizeString(subscription.id)
+    const priceId = normalizeString(subscription.items?.data?.[0]?.price?.id)
+    const metaPlan = normalizeString(subscription.metadata?.plan_type)
+    let planType = resolvePlanFromPriceAndMetadata(priceId, metaPlan || undefined)
+    if (!planType) {
+      const envBasic = normalizeString(process.env.STRIPE_PRICE_BASIC)
+      const envPro = normalizeString(process.env.STRIPE_PRICE_PRO)
+      const envBusiness = normalizeString(process.env.STRIPE_PRICE_BUSINESS)
+      if (priceId && envBasic && priceId === envBasic) planType = 'basic'
+      if (priceId && envPro && priceId === envPro) planType = 'pro'
+      if (priceId && envBusiness && priceId === envBusiness) planType = 'business'
+    }
+
+    const status = String(subscription.status || '').toLowerCase()
+    // Authoritative Stripe state: subscription ended — safe to align DB (not an API "error").
+    if (status === 'canceled' || status === 'incomplete_expired') {
+      await downgradeAccountAfterSubscriptionRemoved(pool, accountId)
+      const row = await fetchAccountBillingRow(pool, accountId)
+      return {
+        applied: true,
+        downgraded: true,
+        effectivePlan: getEffectivePlan(row),
+        storedPlan: getStoredPlan(row),
+      }
+    }
+
+    if (!planType) {
+      return { applied: false, reason: 'unknown_price' }
+    }
+
+    if (!['active', 'trialing', 'past_due'].includes(status)) {
+      return { applied: false, reason: 'inactive_subscription' }
+    }
+
+    const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
+    const cancelAtEnd = subscription.cancel_at_period_end === true
+    const stripeCust = stripeCustomerIdFromSubscription(subscription)
+
+    await pool.query(
+      `UPDATE accounts
+       SET plan_type = $1::text,
+           subscription_id = $2::text,
+           subscription_ends_at = $3::timestamptz,
+           trial_ends_at = NOW(),
+           cancel_at_period_end = $4,
+           stripe_customer_id = COALESCE(NULLIF(TRIM($6::text), ''), stripe_customer_id)
+       WHERE id::text = $5`,
+      [planType, subscriptionIdStr, currentPeriodEnd, cancelAtEnd, accountId, stripeCust ?? ''],
+    )
+
     const row = await fetchAccountBillingRow(pool, accountId)
     return {
       applied: true,
-      downgraded: true,
       effectivePlan: getEffectivePlan(row),
-      storedPlan: getStoredPlan(row),
+      storedPlan: planType,
     }
-  }
-
-  if (!planType) {
-    return { applied: false, reason: 'unknown_price' }
-  }
-
-  if (!['active', 'trialing', 'past_due'].includes(status)) {
-    return { applied: false, reason: 'inactive_subscription' }
-  }
-
-  const currentPeriodEnd = safeDateFromUnixSeconds(subscription.current_period_end, 30)
-  const cancelAtEnd = subscription.cancel_at_period_end === true
-  const stripeCust = stripeCustomerIdFromSubscription(subscription)
-
-  await pool.query(
-    `UPDATE accounts
-     SET plan_type = $1::text,
-         subscription_id = $2::text,
-         subscription_ends_at = $3::timestamptz,
-         trial_ends_at = NOW(),
-         cancel_at_period_end = $4,
-         stripe_customer_id = COALESCE(NULLIF(TRIM($6::text), ''), stripe_customer_id)
-     WHERE id::text = $5`,
-    [planType, subscriptionIdStr, currentPeriodEnd, cancelAtEnd, accountId, stripeCust ?? ''],
-  )
-
-  const row = await fetchAccountBillingRow(pool, accountId)
-  return {
-    applied: true,
-    effectivePlan: getEffectivePlan(row),
-    storedPlan: planType,
+  } catch (err) {
+    console.error('STRIPE SYNC FAILED (applyStripeSubscriptionToAccount):', err)
+    return { applied: false, reason: 'apply_error' }
   }
 }
 
 /**
- * Pull subscription state from Stripe and align DB (webhook fallback).
+ * Pull subscription state from Stripe and align DB (manual / post-checkout sync).
+ * On Stripe or DB errors during sync, returns current DB plan — never overwrites plan_type except
+ * when Stripe returns a valid subscription object (or authoritative canceled/incomplete_expired).
+ * There is no `syncStripePlanAfterLogin` in this codebase; login uses DB only.
  * @param {import('pg').Pool} pool
  * @param {import('stripe').Stripe} stripe
  * @param {string} accountId
  * @param {string} [email]
  */
 export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) {
-  const row = await fetchAccountBillingRow(pool, accountId)
+  let row
+  try {
+    row = await fetchAccountBillingRow(pool, accountId)
+  } catch (err) {
+    console.error('STRIPE SYNC FAILED (fetchAccountBillingRow):', err)
+    return { ok: false, error: 'account_lookup_failed' }
+  }
   if (!row) {
     return { ok: false, error: 'account_not_found' }
   }
@@ -296,19 +316,20 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-
-      console.warn('[billing] sync-plan: retrieve by subscription_id failed', {
-        account_id: accountId,
-        subscription_id: existingSubId,
-        message: msg,
-      })
+      console.error('STRIPE SYNC FAILED:', e)
 
       const shouldSkipSync =
         existingSubId.toLowerCase().startsWith('sub_test') ||
         msg.includes('No such subscription')
 
+      let row2
+      try {
+        row2 = await fetchAccountBillingRow(pool, accountId)
+      } catch {
+        row2 = row
+      }
+
       if (shouldSkipSync) {
-        const row2 = await fetchAccountBillingRow(pool, accountId)
         return {
           ok: true,
           applied: false,
@@ -316,6 +337,15 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
           effectivePlan: getEffectivePlan(row2),
           storedPlan: getStoredPlan(row2),
         }
+      }
+
+      // Network / Stripe outage / unexpected error — do not touch DB; keep existing plan.
+      return {
+        ok: true,
+        applied: false,
+        source: 'stripe_retrieve_failed',
+        effectivePlan: getEffectivePlan(row2),
+        storedPlan: getStoredPlan(row2),
       }
     }
   }
@@ -332,20 +362,38 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
     }
   }
 
-  const customers = await stripe.customers.list({ email: emailNorm, limit: 10 })
+  let customers
+  try {
+    customers = await stripe.customers.list({ email: emailNorm, limit: 10 })
+  } catch (err) {
+    console.error('STRIPE SYNC FAILED (customers.list):', err)
+    const row2 = await fetchAccountBillingRow(pool, accountId).catch(() => row)
+    return {
+      ok: true,
+      applied: false,
+      source: 'stripe_customers_list_failed',
+      effectivePlan: getEffectivePlan(row2),
+      storedPlan: getStoredPlan(row2),
+    }
+  }
+
   const candidates = []
 
   for (const c of customers.data) {
-    const subs = await stripe.subscriptions.list({
-      customer: c.id,
-      status: 'all',
-      limit: 30,
-    })
-    for (const sub of subs.data) {
-      const metaAid = normalizeString(sub.metadata?.account_id)
-      if (metaAid === accountId) {
-        candidates.push(sub)
+    try {
+      const subs = await stripe.subscriptions.list({
+        customer: c.id,
+        status: 'all',
+        limit: 30,
+      })
+      for (const sub of subs.data) {
+        const metaAid = normalizeString(sub.metadata?.account_id)
+        if (metaAid === accountId) {
+          candidates.push(sub)
+        }
       }
+    } catch (err) {
+      console.error('STRIPE SYNC FAILED (subscriptions.list):', err)
     }
   }
 
