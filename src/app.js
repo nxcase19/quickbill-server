@@ -24,17 +24,29 @@ const corsOptions = {
   origin: (origin, callback) => {
     if (!origin) return callback(null, true)
 
-    const allowed = [
-      'https://quickbill.dev',
-      'https://quickbill-web.vercel.app',
-      'http://localhost:5173',
-    ]
+    try {
+      const url = new URL(origin)
+      const host = url.host
 
-    if (allowed.includes(origin)) {
-      return callback(null, true)
+      // localhost
+      if (host.includes('localhost') || host.includes('127.0.0.1')) {
+        return callback(null, true)
+      }
+
+      // main domain
+      if (host.endsWith('quickbill.dev')) {
+        return callback(null, true)
+      }
+
+      // vercel deployments (IMPORTANT)
+      if (host.endsWith('.vercel.app') && host.includes('quickbill')) {
+        return callback(null, true)
+      }
+
+      return callback(null, false)
+    } catch {
+      return callback(null, false)
     }
-
-    return callback(null, false)
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
