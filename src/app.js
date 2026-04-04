@@ -20,38 +20,13 @@ import { handleStripeWebhook } from './routes/billing.js'
 
 const app = express()
 
+const allowedOrigins = [
+  'https://quickbill.dev',
+  'https://quickbill-web.vercel.app',
+]
+
 const corsOptions = {
-  origin: (origin, callback) => {
-    console.log('[CORS CHECK]', origin)
-
-    if (!origin) return callback(null, true)
-
-    try {
-      const url = new URL(origin)
-      const host = url.host
-
-      // allow localhost
-      if (host.includes('localhost') || host.includes('127.0.0.1')) {
-        return callback(null, true)
-      }
-
-      // allow main domain
-      if (host.endsWith('quickbill.dev')) {
-        return callback(null, true)
-      }
-
-      // allow ALL vercel (temporary fix for stability)
-      if (host.endsWith('.vercel.app')) {
-        return callback(null, true)
-      }
-
-      console.warn('[CORS BLOCKED]', host)
-      return callback(null, false)
-    } catch (err) {
-      console.warn('[CORS ERROR]', origin)
-      return callback(null, false)
-    }
-  },
+  origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
