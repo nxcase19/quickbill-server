@@ -36,6 +36,8 @@ router.get('/summary', async (req, res) => {
 
     logTenantAccess('GET /api/reports/summary', req)
 
+    console.log('period:', req.query.period)
+
     const { from, to, period } = req.query
 
     let dateFilter = ''
@@ -45,11 +47,11 @@ router.get('/summary', async (req, res) => {
     const docEffectiveDate = `COALESCE(d.doc_date, (d.created_at)::date)`
 
     if (period === 'day') {
-      dateFilter = `AND ${docEffectiveDate} = CURRENT_DATE`
+      dateFilter = `AND (d.created_at::date = CURRENT_DATE)`
     } else if (period === 'month') {
-      dateFilter = `AND date_trunc('month', ${docEffectiveDate}) = date_trunc('month', CURRENT_DATE)`
+      dateFilter = `AND EXTRACT(MONTH FROM d.created_at)::int = EXTRACT(MONTH FROM CURRENT_TIMESTAMP)::int AND EXTRACT(YEAR FROM d.created_at)::int = EXTRACT(YEAR FROM CURRENT_TIMESTAMP)::int`
     } else if (period === 'year') {
-      dateFilter = `AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
+      dateFilter = `AND EXTRACT(YEAR FROM d.created_at)::int = EXTRACT(YEAR FROM CURRENT_TIMESTAMP)::int`
     } else if (from && to) {
       params.push(from, to)
       dateFilter = `AND ${docEffectiveDate} BETWEEN $2::date AND $3::date`
@@ -70,10 +72,9 @@ router.get('/summary', async (req, res) => {
         COALESCE(
           SUM(
             CASE
-              WHEN d.doc_type = 'INV'
-                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+              WHEN COALESCE(d.sales_order_status, 'active') <> 'cancelled'
                 AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
-              THEN d.total
+              THEN COALESCE(d.total, 0)
               ELSE 0
             END
           ),
@@ -82,11 +83,10 @@ router.get('/summary', async (req, res) => {
         COALESCE(
           SUM(
             CASE
-              WHEN d.doc_type = 'INV'
-                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+              WHEN COALESCE(d.sales_order_status, 'active') <> 'cancelled'
                 AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
                 AND LOWER(TRIM(COALESCE(d.status::text, ''))) = 'paid'
-              THEN d.total
+              THEN COALESCE(d.total, 0)
               ELSE 0
             END
           ),
@@ -95,11 +95,10 @@ router.get('/summary', async (req, res) => {
         COALESCE(
           SUM(
             CASE
-              WHEN d.doc_type = 'INV'
-                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+              WHEN COALESCE(d.sales_order_status, 'active') <> 'cancelled'
                 AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
                 AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'paid'
-              THEN d.total
+              THEN COALESCE(d.total, 0)
               ELSE 0
             END
           ),
@@ -125,13 +124,19 @@ router.get('/summary', async (req, res) => {
       params,
     )
 
-    res.json(rows[0])
-  } catch (err) {
-    if (err.message === 'Missing account_id') {
+    const r = Array.isArray(rows) && rows.length > 0 ? rows[0] : {}
+    res.json({
+      total_amount: Number(r.total_amount ?? 0),
+      paid_amount: Number(r.paid_amount ?? 0),
+      unpaid_amount: Number(r.unpaid_amount ?? 0),
+      vat_sales: Number(r.vat_sales ?? 0),
+    })
+  } catch (error) {
+    if (error?.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
     }
-    console.error(err)
-    res.status(500).json({ error: 'Internal server error' })
+    console.error('SUMMARY ERROR:', error)
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
