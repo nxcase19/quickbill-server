@@ -57,9 +57,11 @@ router.get('/summary', async (req, res) => {
       dateFilter = `AND ${docEffectiveDate} BETWEEN $2::date AND $3::date`
     }
 
-    const result = await safeQuery(
-      pool,
-      `SELECT
+    let result
+    try {
+      result = await safeQuery(
+        pool,
+        `SELECT
         d.total,
         d.status,
         d.doc_type,
@@ -70,12 +72,26 @@ router.get('/summary', async (req, res) => {
       FROM documents d
       WHERE ${tw.clause}
       ${dateFilter}`,
-      params,
-    )
+        params,
+      )
+    } catch (dbErr) {
+      console.error('SUPABASE ERROR:', dbErr)
+      return res.status(200).json({
+        total_amount: 0,
+        paid_amount: 0,
+        unpaid_amount: 0,
+        vat_sales: 0,
+      })
+    }
 
-    const rows = result?.rows || []
-    console.log('ROWS:', rows.length)
-    console.log('SAMPLE:', rows[0])
+    const data = result?.rows
+    const rows = data || []
+
+    const rowAmount = (r) =>
+      Number(r?.total ?? r?.total_amount ?? r?.amount ?? 0) || 0
+
+    console.log('SUMMARY ROWS:', rows.length)
+    console.log('SUMMARY SAMPLE:', rows[0])
 
     const isEligible = (r) => {
       const sos = String(r?.sales_order_status ?? 'active').toLowerCase()
@@ -89,26 +105,35 @@ router.get('/summary', async (req, res) => {
 
     const eligible = rows.filter(isEligible)
 
-    const total_amount = eligible.reduce((sum, r) => sum + Number(r?.total || 0), 0)
+    const total_amount = eligible.reduce((sum, r) => {
+      const value = rowAmount(r)
+      return sum + value
+    }, 0)
 
     const paid_amount = eligible
-      .filter((r) => String(r?.status ?? '').trim().toLowerCase() === 'paid')
-      .reduce((sum, r) => sum + Number(r?.total || 0), 0)
+      .filter((r) => r?.status === 'paid')
+      .reduce((sum, r) => {
+        const value = rowAmount(r)
+        return sum + value
+      }, 0)
 
     const unpaid_amount = eligible
-      .filter((r) => String(r?.status ?? '').trim().toLowerCase() !== 'paid')
-      .reduce((sum, r) => sum + Number(r?.total || 0), 0)
+      .filter((r) => r?.status !== 'paid')
+      .reduce((sum, r) => {
+        const value = rowAmount(r)
+        return sum + value
+      }, 0)
 
     let vat_sales = 0
     for (const r of rows) {
       if (
         r?.vat_enabled === true &&
         String(r?.doc_type ?? '').toUpperCase() === 'RC' &&
-        Number(r?.paid_amount || 0) >= Number(r?.total || 0) &&
+        Number(r?.paid_amount || 0) >= rowAmount(r) &&
         String(r?.sales_order_status ?? 'active').toLowerCase() !== 'cancelled' &&
         String(r?.status ?? '') !== 'cancelled'
       ) {
-        vat_sales += Number(r?.total || 0) - Number(r?.subtotal ?? 0)
+        vat_sales += rowAmount(r) - Number(r?.subtotal ?? 0)
       }
     }
 
