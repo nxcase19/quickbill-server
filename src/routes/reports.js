@@ -49,14 +49,11 @@ router.get('/summary', async (req, res) => {
       result = await safeQuery(
         pool,
         `SELECT
-        d.id,
-        d.total,
-        d.status,
-        d.doc_type,
-        COALESCE(d.doc_date, d.created_at) AS date,
-        d.vat_amount
-      FROM documents d
-      WHERE ${tw.clause}`,
+          COALESCE(SUM(d.total), 0) AS total_sum,
+          COALESCE(SUM(d.vat_amount), 0) AS vat_sum
+        FROM documents d
+        WHERE ${tw.clause}
+          AND d.doc_no LIKE 'RC-%'`,
         params,
       )
     } catch (dbErr) {
@@ -69,37 +66,16 @@ router.get('/summary', async (req, res) => {
       })
     }
 
-    const data = result?.rows
-    const rows = data || []
+    const agg = result?.rows?.[0] || {}
+    const total_amount = Number(agg.total_sum || 0)
+    const vat_sales = Number(agg.vat_sum || 0)
+    const paid_amount = total_amount
+    const unpaid_amount = 0
 
-    console.log('SUMMARY ROWS:', rows.length)
-
-    const isValid = (r) => {
-      const st = String(r.status ?? '').toLowerCase().trim()
-      return st !== 'cancelled'
-    }
-
-    const validRows = rows.filter(isValid)
-
-    console.log('VALID ROWS:', validRows.length)
-
-    const vat_sales = validRows.reduce((sum, r) => {
-      return sum + Number(r.vat_amount || r.vat || 0)
-    }, 0)
-
-    const total_amount = validRows.reduce(
-      (sum, r) => sum + Number(r.total || 0),
-      0,
-    )
-
-    const paid_amount = validRows
-      .filter((r) => {
-        const st = String(r.status ?? '').trim().toLowerCase()
-        return st === 'paid'
-      })
-      .reduce((sum, r) => sum + Number(r.total || 0), 0)
-
-    const unpaid_amount = total_amount - paid_amount
+    console.log('SUMMARY RC (doc_no LIKE RC-%):', {
+      total_amount,
+      vat_sales,
+    })
 
     const round = (num) => Math.round(num * 100) / 100
 
