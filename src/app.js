@@ -32,10 +32,13 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 }
 
-// CORS first — before logging, body parsers, webhooks, and all routes (incl. /api/billing/plan)
-// Same options for preflight (OPTIONS) and normal requests so Allow-* headers stay consistent.
 app.use(cors(corsOptions))
 app.options('*', cors(corsOptions))
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Credentials', 'true')
+  next()
+})
 
 app.use((req, res, next) => {
   console.log('REQ:', req.method, req.path)
