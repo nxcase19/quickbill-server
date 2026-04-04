@@ -328,28 +328,31 @@ router.post('/google', async (req, res) => {
 
     console.log('Google user verified:', email, name || '')
 
-    // STEP 1: existing Google link
-    const { rows: bySubRows } = await safeQuery(
+    const userSelectSql = `SELECT id, account_id, company_id, email, password_hash, google_sub
+       FROM users`
+
+    // Match by email first — never create a second account for the same email
+    const { rows: byEmailRows } = await safeQuery(
       pool,
-      `SELECT id, account_id, company_id, email, password_hash, google_sub
-       FROM users
-       WHERE google_sub = $1`,
-      [sub],
+      `${userSelectSql}
+       WHERE LOWER(TRIM(email)) = $1
+       LIMIT 1`,
+      [email],
       { skipAssert: true },
     )
-    let row = bySubRows[0] ?? null
+    let row = byEmailRows[0] ?? null
 
-    // STEP 2: same email (e.g. registered with password first) — link google_sub, never change plan_type
+    // Same Google identity may already exist if email lookup missed edge cases
     if (!row) {
-      const { rows: byEmailRows } = await safeQuery(
+      const { rows: bySubRows } = await safeQuery(
         pool,
-        `SELECT id, account_id, company_id, email, password_hash, google_sub
-         FROM users
-         WHERE LOWER(TRIM(email)) = $1`,
-        [email],
+        `${userSelectSql}
+         WHERE google_sub = $1
+         LIMIT 1`,
+        [sub],
         { skipAssert: true },
       )
-      row = byEmailRows[0] ?? null
+      row = bySubRows[0] ?? null
     }
 
     if (row) {
@@ -376,6 +379,11 @@ router.post('/google', async (req, res) => {
 
       const billingRow = await fetchAccountBillingRow(pool, row.account_id)
 
+      console.log('[GOOGLE LOGIN FOUND USER]', {
+        email,
+        userId: row.id,
+        accountId: row.account_id,
+      })
       console.log('LOGIN USER PLAN:', billingRow?.plan_type)
 
       const token = signAuthToken({
@@ -410,6 +418,11 @@ router.post('/google', async (req, res) => {
 
       const billingRow = await fetchAccountBillingRow(pool, userRow.account_id)
 
+      console.log('[GOOGLE LOGIN CREATED USER]', {
+        email,
+        userId: userRow.id,
+        accountId: userRow.account_id,
+      })
       console.log('LOGIN USER PLAN:', billingRow?.plan_type)
 
       const token = signAuthToken({
@@ -435,6 +448,59 @@ router.post('/google', async (req, res) => {
         /* ignore */
       }
       if (signupErr.code === '23505') {
+        const { rows: raceRows } = await safeQuery(
+          pool,
+          `${userSelectSql}
+           WHERE LOWER(TRIM(email)) = $1
+           LIMIT 1`,
+          [email],
+          { skipAssert: true },
+        )
+        const existing = raceRows[0] ?? null
+        if (existing) {
+          const existingSub = existing.google_sub != null ? String(existing.google_sub).trim() : ''
+          if (existingSub !== '' && existingSub !== sub) {
+            return res.status(409).json({
+              success: false,
+              error: 'อีเมลนี้ผูกกับ Google อีกบัญชีแล้ว',
+            })
+          }
+          if (existingSub === '') {
+            await pool.query(
+              `UPDATE users SET google_sub = $1 WHERE LOWER(TRIM(email)) = $2`,
+              [sub, email],
+            )
+          }
+          try {
+            await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [existing.id])
+          } catch (e) {
+            if (e && e.code !== '42703') {
+              throw e
+            }
+          }
+          const billingRow = await fetchAccountBillingRow(pool, existing.account_id)
+          console.log('[GOOGLE LOGIN FOUND USER]', {
+            email,
+            userId: existing.id,
+            accountId: existing.account_id,
+            reason: 'after_unique_race',
+          })
+          const token = signAuthToken({
+            userId: existing.id,
+            companyId: existing.company_id,
+            accountId: existing.account_id,
+            email: existing.email,
+            role: 'owner',
+          })
+          return res.json({
+            success: true,
+            data: {
+              token,
+              user: mapUserRow({ ...existing, role: 'owner' }),
+              account: mapAccountRowWithPlan(billingRow),
+            },
+          })
+        }
         return res.status(409).json({ success: false, error: 'Email already registered' })
       }
       throw signupErr
