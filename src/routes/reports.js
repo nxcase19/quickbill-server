@@ -57,7 +57,7 @@ router.get('/summary', async (req, res) => {
         d.vat_amount
       FROM documents d
       WHERE ${tw.clause}
-        AND d.doc_type = 'RC'`,
+        AND LOWER(d.doc_type) IN ('rc', 'receipt')`,
         params,
       )
     } catch (dbErr) {
@@ -167,14 +167,14 @@ router.get('/vat-summary', async (req, res) => {
       ),
     ])
 
-    const vatSales = Number(salesRows[0]?.vat_sales || 0)
-    const vatPurchase = Number(purchaseRows[0]?.vat_purchase || 0)
-    const vatPayable = vatSales - vatPurchase
+    const vat_sales = Number(salesRows[0]?.vat_sales || 0)
+    const vat_purchase = Number(purchaseRows[0]?.vat_purchase || 0)
+    const vat_payable = vat_sales - vat_purchase
 
     res.json({
-      vat_sales: vatSales,
-      vat_purchase: vatPurchase,
-      vat_payable: vatPayable,
+      vat_sales,
+      vat_purchase,
+      vat_payable,
     })
   } catch (err) {
     if (err.message === 'Missing account_id') {
