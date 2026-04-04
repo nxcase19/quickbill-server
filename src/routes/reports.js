@@ -56,7 +56,8 @@ router.get('/summary', async (req, res) => {
         COALESCE(d.doc_date, d.created_at) AS date,
         d.vat_amount
       FROM documents d
-      WHERE ${tw.clause}`,
+      WHERE ${tw.clause}
+        AND d.doc_type = 'RC'`,
         params,
       )
     } catch (dbErr) {
