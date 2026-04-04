@@ -23,37 +23,7 @@ const app = express()
 // CORS first — before logging, body parsers, webhooks, and all routes (incl. /api/billing/plan)
 app.use(
   cors({
-    origin(origin, callback) {
-      console.log('CORS ORIGIN:', origin)
-
-      if (!origin) return callback(null, true)
-
-      try {
-        const url = new URL(origin)
-        const host = url.host
-
-        // allow localhost + 127
-        if (host.includes('localhost') || host.includes('127.0.0.1')) {
-          return callback(null, true)
-        }
-
-        // allow main domain
-        if (host.endsWith('quickbill.dev')) {
-          return callback(null, true)
-        }
-
-        // allow ONLY your vercel deployments
-        if (host.endsWith('.vercel.app') && host.includes('quickbill')) {
-          return callback(null, true)
-        }
-
-        console.warn('CORS BLOCKED:', origin)
-        return callback(null, false)
-      } catch {
-        console.warn('CORS INVALID ORIGIN:', origin)
-        return callback(null, false)
-      }
-    },
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
