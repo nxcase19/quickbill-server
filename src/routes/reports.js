@@ -100,20 +100,26 @@ router.get('/summary', async (req, res) => {
     const rowAmount = (r) =>
       Number(r?.total ?? r?.total_amount ?? r?.amount ?? 0) || 0
 
+    const normalizeStatus = (s) => String(s ?? '').trim().toLowerCase()
+
     console.log('[reports/summary] rows.length:', rows.length)
     console.log('[reports/summary] first 3 rows:', rows.slice(0, 3))
 
     const isEligible = (r) => {
       const sos = String(r?.sales_order_status ?? 'active').toLowerCase()
       if (sos === 'cancelled') return false
-      const st = String(r?.status == null ? '' : r.status)
-        .trim()
-        .toLowerCase()
+      const st = normalizeStatus(r.status)
       if (st === 'cancelled') return false
       return true
     }
 
     const eligible = rows.filter(isEligible)
+
+    console.log('AFTER FILTER COUNT:', eligible.length)
+    console.log(
+      'PAID COUNT:',
+      eligible.filter((r) => normalizeStatus(r.status) === 'paid').length,
+    )
 
     const total_amount = eligible.reduce((sum, r) => {
       const value = rowAmount(r)
@@ -121,14 +127,14 @@ router.get('/summary', async (req, res) => {
     }, 0)
 
     const paid_amount = eligible
-      .filter((r) => r?.status === 'paid')
+      .filter((r) => normalizeStatus(r.status) === 'paid')
       .reduce((sum, r) => {
         const value = rowAmount(r)
         return sum + value
       }, 0)
 
     const unpaid_amount = eligible
-      .filter((r) => r?.status !== 'paid')
+      .filter((r) => normalizeStatus(r.status) !== 'paid')
       .reduce((sum, r) => {
         const value = rowAmount(r)
         return sum + value
