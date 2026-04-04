@@ -6,7 +6,7 @@ import authRoutes from './routes/auth.js'
 import customersRoutes from './routes/customers.js'
 import productsRoutes from './routes/products.js'
 import documentsRoutes from './routes/documents.js'
-import { paymentsRouter } from "./routes/payments.js"
+import { paymentsRouter } from './routes/payments.js'
 import reportsRoutes from './routes/reports.js'
 import companyRoutes from './routes/company.js'
 import purchasesRoutes from './routes/purchases.js'
@@ -20,39 +20,29 @@ import { handleStripeWebhook } from './routes/billing.js'
 
 const app = express()
 
-/** Allowed browser origins (credentialed requests require exact match). */
-const CORS_ORIGINS = [
+const allowedOrigins = [
   'https://quickbill.dev',
   'https://quickbill-web.vercel.app',
   'http://localhost:5173',
-  'http://127.0.0.1:5173',
 ]
 
-/**
- * Diagnostic only: set CORS_DIAGNOSTIC=true on the server to allow any Origin
- * (uses origin: true — works with credentials). Do not use long-term in production.
- * Note: origin: '*' cannot be used with credentials: true (browser will block).
- */
-const corsDiagnostic = process.env.CORS_DIAGNOSTIC === 'true'
-
-// FIRST middleware — before express.json(), routes, webhooks, everything (covers /api/billing/plan preflight + responses)
+// CORS first — before logging, body parsers, webhooks, and all routes (incl. /api/billing/plan)
 app.use(
-  cors(
-    corsDiagnostic
-      ? {
-          origin: true,
-          credentials: true,
-          methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-          allowedHeaders: ['Content-Type', 'Authorization'],
-        }
-      : {
-          origin: CORS_ORIGINS,
-          credentials: true,
-          methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-          allowedHeaders: ['Content-Type', 'Authorization'],
-        },
-  ),
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true)
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true)
+      }
+      return callback(new Error('Not allowed by CORS'))
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  }),
 )
+
+app.options('*', cors())
 
 app.use((req, res, next) => {
   console.log('REQ:', req.method, req.path)
