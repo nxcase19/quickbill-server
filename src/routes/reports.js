@@ -19,11 +19,13 @@ function getTimestamp() {
   return `${year}-${month}-${day}_${hours}-${minutes}`
 }
 
-function buildExportFilename(prefix, extra = '') {
-  const ts = getTimestamp()
-  return extra
-    ? `${prefix}-${extra}-${ts}.xlsx`
-    : `${prefix}-${ts}.xlsx`
+/** Standard SaaS export names: {base}_YYYY-MM-DD_HH-mm.xlsx (server local time). */
+function exportStandardXlsxFilename(baseName) {
+  return `${baseName}_${getTimestamp()}.xlsx`
+}
+
+function buildPp30ExportFilename(month) {
+  return `pp30-${month}-${getTimestamp()}.xlsx`
 }
 
 const router = Router()
@@ -54,14 +56,53 @@ router.get('/summary', async (req, res) => {
     const { rows } = await safeQuery(
       pool,
       `SELECT
-        COALESCE(SUM(total),0) AS total_amount,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN total ELSE 0 END),0) AS paid_amount,
-        COALESCE(SUM(CASE WHEN status != 'paid' THEN total ELSE 0 END),0) AS unpaid_amount,
         COALESCE(
           SUM(
             CASE
-              WHEN vat_enabled = true AND doc_type = 'RC' AND d.paid_amount >= d.total
-              THEN (total - subtotal)
+              WHEN d.doc_type = 'INV'
+                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+                AND COALESCE(d.status, '') <> 'cancelled'
+              THEN d.total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS total_amount,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN d.doc_type = 'INV'
+                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+                AND COALESCE(d.status, '') <> 'cancelled'
+                AND d.status = 'paid'
+              THEN d.total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS paid_amount,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN d.doc_type = 'INV'
+                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+                AND COALESCE(d.status, '') <> 'cancelled'
+                AND d.status <> 'paid'
+              THEN d.total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS unpaid_amount,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN d.vat_enabled = true
+                AND d.doc_type = 'RC'
+                AND d.paid_amount >= d.total
+                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+                AND COALESCE(d.status, '') <> 'cancelled'
+              THEN (d.total - d.subtotal)
               ELSE 0
             END
           ),
@@ -299,7 +340,7 @@ router.get('/export', assertCanExport, async (req, res) => {
 
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${buildExportFilename('report')}"`,
+      `attachment; filename="${exportStandardXlsxFilename('documents')}"`,
     )
 
     await workbook.xlsx.write(res)
@@ -449,7 +490,7 @@ router.get('/vat-sales/export', assertCanExport, async (req, res) => {
 
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${buildExportFilename('vat-sales')}"`,
+      `attachment; filename="${exportStandardXlsxFilename('salevat')}"`,
     )
     res.setHeader(
       'Content-Type',
@@ -488,8 +529,11 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
         p.total
       FROM purchase_invoices p
       WHERE ${tw.clause}
-        AND (COALESCE(p.status, 'active') = 'active')
-        AND (COALESCE(p.document_status, 'issued') = 'issued')
+        AND LOWER(COALESCE(p.status, 'active')) IN ('active', 'paid')
+        AND COALESCE(p.document_status, 'issued') = 'issued'
+        AND p.vat_amount IS NOT NULL
+        AND COALESCE(p.vat_amount, 0) > 0
+        AND p.deleted_at IS NULL
     `
     const params = [tw.param]
 
@@ -538,7 +582,7 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
 
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${buildExportFilename('vat-purchase')}"`,
+      `attachment; filename="${exportStandardXlsxFilename('purchasevat')}"`,
     )
     res.setHeader(
       'Content-Type',
@@ -711,7 +755,7 @@ router.get('/pp30/export', assertCanExport, async (req, res) => {
 
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${buildExportFilename('pp30', month)}"`,
+      `attachment; filename="${buildPp30ExportFilename(month)}"`,
     )
     res.setHeader(
       'Content-Type',
