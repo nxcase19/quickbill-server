@@ -27,6 +27,8 @@ async function resolveRequestPlan(accountId) {
 }
 
 export async function authMiddleware(req, res, next) {
+  console.log('[AUTH] start', req.path)
+
   try {
     const authHeader = req.headers.authorization
     const hasBearer =
@@ -38,7 +40,16 @@ export async function authMiddleware(req, res, next) {
       const devAccountId =
         process.env.DEV_ACCOUNT_ID || '6466b94b-6852-4797-9378-7ae617809699'
       req.account_id = devAccountId
-      const resolved = await resolveRequestPlan(devAccountId)
+      let resolved
+      try {
+        resolved = await resolveRequestPlan(devAccountId)
+      } catch (planErr) {
+        console.error('[AUTH] resolveRequestPlan (dev):', planErr)
+        return res.status(500).json({
+          success: false,
+          error: 'Auth service unavailable',
+        })
+      }
       req.user = {
         account_id: devAccountId,
         role: 'owner',
@@ -47,6 +58,7 @@ export async function authMiddleware(req, res, next) {
         is_trial_active: resolved.is_trial_active,
         trial_ends_at: resolved.trial_ends_at,
       }
+      console.log('[AUTH] user ok', req.user.user_id ?? req.user.account_id)
       return next()
     }
 
@@ -65,6 +77,7 @@ export async function authMiddleware(req, res, next) {
     }
 
     if (!hasBearer) {
+      console.log('[AUTH] unauthorized')
       return res.status(401).json({
         success: false,
         error: 'Unauthorized: Missing token',
@@ -72,10 +85,19 @@ export async function authMiddleware(req, res, next) {
     }
 
     const token = authHeader.split(' ')[1]
+    if (!token || String(token).trim() === '') {
+      console.log('[AUTH] unauthorized')
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized: Missing token',
+      })
+    }
+
     let decoded
     try {
       decoded = verifyAuthToken(token)
     } catch {
+      console.log('[AUTH] unauthorized')
       return res.status(401).json({
         success: false,
         error: 'Unauthorized: Invalid or expired token',
@@ -84,13 +106,23 @@ export async function authMiddleware(req, res, next) {
 
     const accountId = decoded?.account_id
     if (!accountId) {
+      console.log('[AUTH] unauthorized')
       return res.status(401).json({
         success: false,
         error: 'Unauthorized: Invalid token',
       })
     }
 
-    const resolved = await resolveRequestPlan(accountId)
+    let resolved
+    try {
+      resolved = await resolveRequestPlan(accountId)
+    } catch (planErr) {
+      console.error('[AUTH] resolveRequestPlan:', planErr)
+      return res.status(500).json({
+        success: false,
+        error: 'Auth service unavailable',
+      })
+    }
 
     req.account_id = accountId
     req.user = {
@@ -102,9 +134,13 @@ export async function authMiddleware(req, res, next) {
       is_trial_active: resolved.is_trial_active,
       trial_ends_at: resolved.trial_ends_at,
     }
+    console.log('[AUTH] user ok', req.user.user_id ?? req.user.account_id)
     return next()
   } catch (err) {
     console.error('AUTH ERROR:', err)
+    if (res.headersSent) {
+      return next(err)
+    }
     return res.status(500).json({
       success: false,
       error: 'Auth middleware error',
