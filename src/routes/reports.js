@@ -527,6 +527,7 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
 
     const { from, to } = req.query
     const tw = buildTenantWhereClause(req, 'p', 1)
+    const purchaseDateExpr = `COALESCE(p.doc_date, (p.created_at)::date)`
     let sql = `
       SELECT
         p.doc_date,
@@ -538,27 +539,27 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
       FROM purchase_invoices p
       WHERE ${tw.clause}
         AND LOWER(COALESCE(p.status, 'active')) IN ('active', 'paid')
-        AND COALESCE(p.document_status, 'issued') = 'issued'
-        AND p.vat_amount IS NOT NULL
+        AND LOWER(TRIM(COALESCE(p.document_status::text, 'issued'))) <> 'cancelled'
         AND COALESCE(p.vat_amount, 0) > 0
-        AND p.deleted_at IS NULL
+        AND (p.deleted_at IS NULL)
     `
     const params = [tw.param]
 
     if (from && to) {
-      sql += ` AND p.doc_date >= $${params.length + 1} AND p.doc_date <= $${params.length + 2}`
+      sql += ` AND ${purchaseDateExpr} >= $${params.length + 1}::date AND ${purchaseDateExpr} <= $${params.length + 2}::date`
       params.push(String(from).slice(0, 10), String(to).slice(0, 10))
     } else if (from) {
-      sql += ` AND p.doc_date >= $${params.length + 1}`
+      sql += ` AND ${purchaseDateExpr} >= $${params.length + 1}::date`
       params.push(String(from).slice(0, 10))
     } else if (to) {
-      sql += ` AND p.doc_date <= $${params.length + 1}`
+      sql += ` AND ${purchaseDateExpr} <= $${params.length + 1}::date`
       params.push(String(to).slice(0, 10))
     }
 
-    sql += ` ORDER BY p.doc_date ASC NULLS LAST, p.id ASC`
+    sql += ` ORDER BY ${purchaseDateExpr} ASC NULLS LAST, p.id ASC`
 
     const { rows } = await safeQuery(pool, sql, params)
+    console.log('purchase vat rows:', rows.length)
 
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('VAT Purchase')
