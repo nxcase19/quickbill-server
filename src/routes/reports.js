@@ -528,6 +528,54 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
     const { from, to } = req.query
     const tw = buildTenantWhereClause(req, 'p', 1)
     const purchaseDateExpr = `COALESCE(p.doc_date, (p.created_at)::date)`
+
+    const { rows: allCountRows } = await safeQuery(
+      pool,
+      `SELECT COUNT(*)::int AS n FROM purchase_invoices p WHERE ${tw.clause}`,
+      [tw.param],
+    )
+    const allRows = { length: Number(allCountRows[0]?.n ?? 0) }
+    console.log('ALL PURCHASE RECORDS:', allRows.length)
+
+    const { rows: filteredCountRows } = await safeQuery(
+      pool,
+      `SELECT COUNT(*)::int AS n FROM purchase_invoices p
+       WHERE ${tw.clause}
+         AND LOWER(COALESCE(p.status, 'active')) IN ('active', 'paid')
+         AND LOWER(TRIM(COALESCE(p.document_status::text, 'issued'))) <> 'cancelled'
+         AND (p.deleted_at IS NULL)`,
+      [tw.param],
+    )
+    const filteredRows = { length: Number(filteredCountRows[0]?.n ?? 0) }
+    console.log('AFTER TYPE FILTER:', filteredRows.length)
+
+    const { rows: vatCountRows } = await safeQuery(
+      pool,
+      `SELECT COUNT(*)::int AS n FROM purchase_invoices p
+       WHERE ${tw.clause}
+         AND LOWER(COALESCE(p.status, 'active')) IN ('active', 'paid')
+         AND LOWER(TRIM(COALESCE(p.document_status::text, 'issued'))) <> 'cancelled'
+         AND COALESCE(p.vat_amount, 0) > 0
+         AND (p.deleted_at IS NULL)`,
+      [tw.param],
+    )
+    const vatRows = { length: Number(vatCountRows[0]?.n ?? 0) }
+    console.log('AFTER VAT FILTER:', vatRows.length)
+
+    const { rows: vatSampleRows } = await safeQuery(
+      pool,
+      `SELECT p.doc_date, p.doc_no, p.supplier_name, p.subtotal, p.vat_amount, p.total
+       FROM purchase_invoices p
+       WHERE ${tw.clause}
+         AND LOWER(COALESCE(p.status, 'active')) IN ('active', 'paid')
+         AND LOWER(TRIM(COALESCE(p.document_status::text, 'issued'))) <> 'cancelled'
+         AND COALESCE(p.vat_amount, 0) > 0
+         AND (p.deleted_at IS NULL)
+       LIMIT 1`,
+      [tw.param],
+    )
+    console.log('SAMPLE ROW:', vatSampleRows[0] ?? null)
+
     let sql = `
       SELECT
         p.doc_date,
