@@ -349,6 +349,7 @@ router.get('/export', assertCanExport, async (req, res) => {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')
     res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
@@ -501,6 +502,7 @@ router.get('/vat-sales/export', assertCanExport, async (req, res) => {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')
     res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
@@ -591,6 +593,7 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')
     res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
@@ -762,6 +765,7 @@ router.get('/pp30/export', assertCanExport, async (req, res) => {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')
     res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
