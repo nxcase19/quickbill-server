@@ -79,6 +79,7 @@ function logPlanCheck(row, effective) {
  */
 export function getEffectivePlan(row) {
   if (!row) {
+    logPlanCheck(null, 'free')
     return 'free'
   }
 

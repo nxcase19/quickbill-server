@@ -8,12 +8,6 @@ import {
   getStoredPlan,
   isTrialActive,
 } from '../utils/planService.js'
-import { getPlanAccess } from '../utils/planAccess.js'
-import {
-  FREE_DAILY_DOC_LIMIT,
-  FREE_MONTHLY_DOC_LIMIT,
-  countDocumentsCreatedToday,
-} from '../utils/usageService.js'
 import {
   getPriceIdForPlan,
   getStripeClient,
@@ -285,6 +279,17 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
   if (existingSubId) {
     try {
       const sub = await stripe.subscriptions.retrieve(existingSubId)
+      if (!sub || !sub.status) {
+        console.warn('INVALID SUBSCRIPTION — skip update')
+        const rowBad = await fetchAccountBillingRow(pool, accountId).catch(() => row)
+        return {
+          ok: true,
+          applied: false,
+          source: 'invalid_subscription_response',
+          effectivePlan: getEffectivePlan(rowBad),
+          storedPlan: getStoredPlan(rowBad),
+        }
+      }
       const metaAid = normalizeString(sub.metadata?.account_id)
       if (metaAid && metaAid !== accountId) {
         console.warn('[billing] sync-plan: subscription metadata account_id mismatch', {
@@ -409,7 +414,33 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
     }
   }
 
-  const r = await applyStripeSubscriptionToAccount(pool, accountId, best)
+  if (!best.status) {
+    console.warn('INVALID SUBSCRIPTION — skip update')
+    const rowSkip = await fetchAccountBillingRow(pool, accountId).catch(() => row)
+    return {
+      ok: true,
+      applied: false,
+      source: 'invalid_subscription_candidate',
+      effectivePlan: getEffectivePlan(rowSkip),
+      storedPlan: getStoredPlan(rowSkip),
+    }
+  }
+
+  let r
+  try {
+    r = await applyStripeSubscriptionToAccount(pool, accountId, best)
+  } catch (err) {
+    console.error('STRIPE SYNC FAILED:', err)
+    const row3 = await fetchAccountBillingRow(pool, accountId).catch(() => row)
+    return {
+      ok: true,
+      applied: false,
+      source: 'apply_threw',
+      effectivePlan: getEffectivePlan(row3),
+      storedPlan: getStoredPlan(row3),
+    }
+  }
+
   if (r.applied) {
     return {
       ok: true,
@@ -431,28 +462,22 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
   }
 }
 
-function buildPlanFallbackData() {
-  return {
-    plan: 'free',
-    planType: 'free',
-    effectivePlan: 'free',
-    trialActive: false,
-    trialEndsAt: null,
-    subscriptionEndsAt: null,
-    cancelAtPeriodEnd: false,
-    features: {
-      export: false,
-      purchase_orders: false,
-      tax_purchase: false,
-    },
-    limits: {
-      freeDocumentsPerDay: FREE_DAILY_DOC_LIMIT,
-      freeDocumentsPerMonth: FREE_MONTHLY_DOC_LIMIT,
-    },
-    documentsCreatedToday: null,
-  }
+/** Read-only fallback for GET /plan fatal errors — does not imply user is on free tier. */
+const PLAN_READ_FALLBACK_DATA = {
+  plan: 'unknown',
+  planType: 'unknown',
+  effectivePlan: 'unknown',
+  trialActive: false,
+  trialEndsAt: null,
+  subscriptionEndsAt: null,
+  cancelAtPeriodEnd: false,
+  features: {},
+  limits: {},
 }
 
+/**
+ * Pure read: DB row + getEffectivePlan only. No Stripe, no writes, no usage queries.
+ */
 router.get('/plan', async (req, res) => {
   try {
     let accountId
@@ -462,106 +487,54 @@ router.get('/plan', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
 
-    try {
-      logTenantAccess('GET /api/billing/plan', req)
-    } catch (e) {
-      console.error('PLAN ENDPOINT logTenantAccess:', e)
-    }
-
     let row = null
     try {
       row = await fetchAccountBillingRow(pool, accountId)
-    } catch (e) {
-      console.error('FETCH BILLING ROW ERROR:', e)
-    }
-
-    if (!row) {
-      return res.json({ success: true, data: buildPlanFallbackData() })
+    } catch (err) {
+      console.error('BILLING PLAN ERROR:', err)
     }
 
     let effective = 'free'
     try {
       effective = getEffectivePlan(row)
-    } catch (e) {
-      console.error('EFFECTIVE PLAN ERROR:', e)
+    } catch (err) {
+      console.error('BILLING PLAN ERROR:', err)
     }
 
-    let trialActive = false
-    try {
-      trialActive = isTrialActive(row)
-    } catch (e) {
-      console.error('TRIAL ACTIVE ERROR:', e)
-      trialActive = effective === 'trial'
-    }
+    const raw = row?.plan_type ?? 'free'
+    const lower = String(raw).toLowerCase()
 
-    let features = {
-      export: false,
-      purchase_orders: false,
-      tax_purchase: false,
-    }
-    try {
-      const access = getPlanAccess(effective)
-      features = {
-        export: access.canExport,
-        purchase_orders: access.canUsePO,
-        tax_purchase: access.canUseAdvancedTax,
-      }
-    } catch (e) {
-      console.error('PLAN ACCESS ERROR:', e)
-    }
+    let stored = 'free'
+    if (lower.startsWith('pro')) stored = 'pro'
+    else if (lower.startsWith('business')) stored = 'pro'
+    else if (lower.startsWith('basic')) stored = 'basic'
+    else if (lower === 'trial') stored = 'trial'
 
-    let documentsCreatedToday = null
-    try {
-      const access = getPlanAccess(effective)
-      if (access.limitDocuments) {
-        documentsCreatedToday = await countDocumentsCreatedToday(pool, accountId)
-      }
-    } catch (e) {
-      console.error('DOCUMENT COUNT ERROR:', e)
-    }
-
-    let storedPlan = 'free'
-    try {
-      storedPlan = getStoredPlan(row)
-    } catch (e) {
-      console.error('STORED PLAN ERROR:', e)
-      storedPlan = String(row.plan_type || 'free').toLowerCase()
-    }
-
-    try {
-      console.log('[BILLING PLAN]', {
-        accountId,
-        existingSubId: normalizeString(row.subscription_id) || null,
-        effectivePlan: effective,
-        storedPlan,
-      })
-    } catch {
-      /* ignore */
-    }
+    console.log('[PLAN API]', {
+      accountId,
+      stored,
+      effective,
+    })
 
     return res.json({
       success: true,
       data: {
-        plan: effective,
-        planType: storedPlan,
+        plan: stored,
+        planType: stored,
         effectivePlan: effective,
-        trialActive,
-        trialEndsAt: row.trial_ends_at ?? null,
-        subscriptionEndsAt: row.subscription_ends_at ?? null,
-        cancelAtPeriodEnd: row.cancel_at_period_end === true,
-        features,
-        limits: {
-          freeDocumentsPerDay: FREE_DAILY_DOC_LIMIT,
-          freeDocumentsPerMonth: FREE_MONTHLY_DOC_LIMIT,
-        },
-        documentsCreatedToday,
+        trialActive: effective === 'trial',
+        trialEndsAt: row?.trial_ends_at ?? null,
+        subscriptionEndsAt: row?.subscription_ends_at ?? null,
+        cancelAtPeriodEnd: row?.cancel_at_period_end === true,
+        features: {},
+        limits: {},
       },
     })
   } catch (err) {
-    console.error('PLAN ENDPOINT FATAL:', err)
+    console.error('BILLING PLAN ERROR:', err)
     return res.json({
       success: true,
-      data: buildPlanFallbackData(),
+      data: { ...PLAN_READ_FALLBACK_DATA },
     })
   }
 })
@@ -606,8 +579,6 @@ router.get('/trial-status', async (req, res) => {
     } catch {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
-
-    logTenantAccess('GET /api/billing/trial-status', req)
 
     const trialEnds = req.user?.trial_ends_at ?? null
     const now = Date.now()
