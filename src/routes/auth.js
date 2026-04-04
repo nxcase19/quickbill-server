@@ -358,6 +358,13 @@ router.post('/google', async (req, res) => {
     if (row) {
       const existingSub = row.google_sub != null ? String(row.google_sub).trim() : ''
       if (existingSub !== '' && existingSub !== sub) {
+        console.log('[GOOGLE LOGIN SUB CONFLICT]', {
+          email,
+          userId: row.id,
+          accountId: row.account_id,
+          existingSub,
+          incomingSub: sub,
+        })
         return res.status(409).json({
           success: false,
           error: 'อีเมลนี้ผูกกับ Google อีกบัญชีแล้ว',
@@ -448,7 +455,7 @@ router.post('/google', async (req, res) => {
         /* ignore */
       }
       if (signupErr.code === '23505') {
-        const { rows: raceRows } = await safeQuery(
+        const { rows: raceByEmail } = await safeQuery(
           pool,
           `${userSelectSql}
            WHERE LOWER(TRIM(email)) = $1
@@ -456,10 +463,29 @@ router.post('/google', async (req, res) => {
           [email],
           { skipAssert: true },
         )
-        const existing = raceRows[0] ?? null
+        let existing = raceByEmail[0] ?? null
+        if (!existing) {
+          const { rows: raceBySub } = await safeQuery(
+            pool,
+            `${userSelectSql}
+             WHERE google_sub = $1
+             LIMIT 1`,
+            [sub],
+            { skipAssert: true },
+          )
+          existing = raceBySub[0] ?? null
+        }
         if (existing) {
           const existingSub = existing.google_sub != null ? String(existing.google_sub).trim() : ''
           if (existingSub !== '' && existingSub !== sub) {
+            console.log('[GOOGLE LOGIN SUB CONFLICT]', {
+              email,
+              userId: existing.id,
+              accountId: existing.account_id,
+              existingSub,
+              incomingSub: sub,
+              context: 'after_unique_race',
+            })
             return res.status(409).json({
               success: false,
               error: 'อีเมลนี้ผูกกับ Google อีกบัญชีแล้ว',
@@ -479,11 +505,10 @@ router.post('/google', async (req, res) => {
             }
           }
           const billingRow = await fetchAccountBillingRow(pool, existing.account_id)
-          console.log('[GOOGLE LOGIN FOUND USER]', {
+          console.log('[GOOGLE LOGIN RETRY FOUND USER]', {
             email,
             userId: existing.id,
             accountId: existing.account_id,
-            reason: 'after_unique_race',
           })
           const token = signAuthToken({
             userId: existing.id,
