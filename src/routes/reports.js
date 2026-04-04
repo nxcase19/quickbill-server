@@ -36,53 +36,26 @@ router.get('/summary', async (req, res) => {
 
     logTenantAccess('GET /api/reports/summary', req)
 
-    const { from, to, period } = req.query
-
-    let dateFilter = ''
     const tw = buildTenantWhereClause(req, 'd', 1)
     const params = [tw.param]
-
-    const docEffectiveDate = `COALESCE(d.doc_date, (d.created_at)::date)`
-
-    if (period === 'day') {
-      dateFilter = `AND ${docEffectiveDate} = CURRENT_DATE`
-    } else if (period === 'month') {
-      dateFilter = `AND EXTRACT(MONTH FROM ${docEffectiveDate})::int = EXTRACT(MONTH FROM CURRENT_DATE)::int
-      AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
-    } else if (period === 'year') {
-      dateFilter = `AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
-    } else if (from && to) {
-      params.push(from, to)
-      dateFilter = `AND ${docEffectiveDate} BETWEEN $2::date AND $3::date`
-    }
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.set('Pragma', 'no-cache')
     res.set('Expires', '0')
     res.set('Surrogate-Control', 'no-store')
 
-    console.log('[reports/summary] period, from, to:', {
-      period: period ?? null,
-      from: from ?? null,
-      to: to ?? null,
-    })
-    console.log('[reports/summary] final params:', params)
-
     let result
     try {
       result = await safeQuery(
         pool,
         `SELECT
+        d.id,
         d.total,
         d.status,
         d.doc_type,
-        d.vat_enabled,
-        d.paid_amount,
-        d.subtotal,
-        d.sales_order_status
+        COALESCE(d.doc_date, d.created_at) AS date
       FROM documents d
-      WHERE ${tw.clause}
-      ${dateFilter}`,
+      WHERE ${tw.clause}`,
         params,
       )
     } catch (dbErr) {
@@ -98,48 +71,34 @@ router.get('/summary', async (req, res) => {
     const data = result?.rows
     const rows = data || []
 
-    console.log('SUMMARY ROWS FROM DB:', rows.length)
-    console.log('FIRST ROW:', rows[0])
+    console.log('SUMMARY ROWS:', rows.length)
+
+    const isValid = (r) => {
+      const st = String(r.status ?? '').toLowerCase().trim()
+      return st !== 'cancelled'
+    }
+
+    const validRows = rows.filter(isValid)
+
+    console.log('VALID ROWS:', validRows.length)
 
     const rowAmount = (r) =>
       Number(r?.total ?? r?.total_amount ?? r?.amount ?? 0) || 0
 
-    const normalizeStatus = (s) => String(s ?? '').trim().toLowerCase()
-
-    const isEligible = (r) => {
-      const sos = String(r?.sales_order_status ?? 'active').toLowerCase()
-      if (sos === 'cancelled') return false
-      const st = normalizeStatus(r.status)
-      if (st === 'cancelled') return false
-      return true
-    }
-
-    const eligible = rows.filter(isEligible)
-
-    console.log('AFTER FILTER COUNT:', eligible.length)
-    console.log(
-      'PAID COUNT:',
-      eligible.filter((r) => normalizeStatus(r.status) === 'paid').length,
+    const total_amount = validRows.reduce(
+      (sum, r) => sum + Number(r.total || 0),
+      0,
     )
 
-    const total_amount = eligible.reduce((sum, r) => {
-      const value = rowAmount(r)
-      return sum + value
-    }, 0)
+    const paid_amount = validRows
+      .filter((r) =>
+        String(r.status ?? '')
+          .toLowerCase()
+          .includes('paid'),
+      )
+      .reduce((sum, r) => sum + Number(r.total || 0), 0)
 
-    const paid_amount = eligible
-      .filter((r) => normalizeStatus(r.status) === 'paid')
-      .reduce((sum, r) => {
-        const value = rowAmount(r)
-        return sum + value
-      }, 0)
-
-    const unpaid_amount = eligible
-      .filter((r) => normalizeStatus(r.status) !== 'paid')
-      .reduce((sum, r) => {
-        const value = rowAmount(r)
-        return sum + value
-      }, 0)
+    const unpaid_amount = total_amount - paid_amount
 
     let vat_sales = 0
     for (const r of rows) {
