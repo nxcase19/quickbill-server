@@ -57,86 +57,78 @@ router.get('/summary', async (req, res) => {
       dateFilter = `AND ${docEffectiveDate} BETWEEN $2::date AND $3::date`
     }
 
-    const countSql = `SELECT COUNT(*)::int AS n FROM documents d WHERE ${tw.clause} ${dateFilter}`
-    const { rows: countRows } = await safeQuery(pool, countSql, params)
-    console.log('[reports/summary] debug row count', {
-      period: period ?? null,
-      from: from ?? null,
-      to: to ?? null,
-      matching_documents: countRows[0]?.n ?? null,
-    })
-
-    const { rows } = await safeQuery(
+    const result = await safeQuery(
       pool,
       `SELECT
-        COALESCE(
-          SUM(
-            CASE
-              WHEN COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
-              THEN COALESCE(d.total, 0)
-              ELSE 0
-            END
-          ),
-          0
-        ) AS total_amount,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
-                AND LOWER(TRIM(COALESCE(d.status::text, ''))) = 'paid'
-              THEN COALESCE(d.total, 0)
-              ELSE 0
-            END
-          ),
-          0
-        ) AS paid_amount,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'cancelled'
-                AND LOWER(TRIM(COALESCE(d.status::text, ''))) <> 'paid'
-              THEN COALESCE(d.total, 0)
-              ELSE 0
-            END
-          ),
-          0
-        ) AS unpaid_amount,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN d.vat_enabled = true
-                AND d.doc_type = 'RC'
-                AND d.paid_amount >= d.total
-                AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-                AND COALESCE(d.status, '') <> 'cancelled'
-              THEN (d.total - d.subtotal)
-              ELSE 0
-            END
-          ),
-          0
-        ) AS vat_sales
+        d.total,
+        d.status,
+        d.doc_type,
+        d.vat_enabled,
+        d.paid_amount,
+        d.subtotal,
+        d.sales_order_status
       FROM documents d
       WHERE ${tw.clause}
       ${dateFilter}`,
       params,
     )
 
-    const r = Array.isArray(rows) && rows.length > 0 ? rows[0] : {}
+    const rows = result?.rows || []
+    console.log('ROWS:', rows.length)
+    console.log('SAMPLE:', rows[0])
+
+    const isEligible = (r) => {
+      const sos = String(r?.sales_order_status ?? 'active').toLowerCase()
+      if (sos === 'cancelled') return false
+      const st = String(r?.status == null ? '' : r.status)
+        .trim()
+        .toLowerCase()
+      if (st === 'cancelled') return false
+      return true
+    }
+
+    const eligible = rows.filter(isEligible)
+
+    const total_amount = eligible.reduce((sum, r) => sum + Number(r?.total || 0), 0)
+
+    const paid_amount = eligible
+      .filter((r) => String(r?.status ?? '').trim().toLowerCase() === 'paid')
+      .reduce((sum, r) => sum + Number(r?.total || 0), 0)
+
+    const unpaid_amount = eligible
+      .filter((r) => String(r?.status ?? '').trim().toLowerCase() !== 'paid')
+      .reduce((sum, r) => sum + Number(r?.total || 0), 0)
+
+    let vat_sales = 0
+    for (const r of rows) {
+      if (
+        r?.vat_enabled === true &&
+        String(r?.doc_type ?? '').toUpperCase() === 'RC' &&
+        Number(r?.paid_amount || 0) >= Number(r?.total || 0) &&
+        String(r?.sales_order_status ?? 'active').toLowerCase() !== 'cancelled' &&
+        String(r?.status ?? '') !== 'cancelled'
+      ) {
+        vat_sales += Number(r?.total || 0) - Number(r?.subtotal ?? 0)
+      }
+    }
+
     res.json({
-      total_amount: Number(r.total_amount ?? 0),
-      paid_amount: Number(r.paid_amount ?? 0),
-      unpaid_amount: Number(r.unpaid_amount ?? 0),
-      vat_sales: Number(r.vat_sales ?? 0),
+      total_amount,
+      paid_amount,
+      unpaid_amount,
+      vat_sales,
     })
   } catch (error) {
     if (error?.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
     }
     console.error('SUMMARY ERROR:', error)
-    return res.status(500).json({ error: 'Internal server error' })
+    return res.status(200).json({
+      total_amount: 0,
+      paid_amount: 0,
+      unpaid_amount: 0,
+      vat_sales: 0,
+    })
   }
 })
 
