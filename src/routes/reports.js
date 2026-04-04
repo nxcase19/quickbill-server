@@ -47,7 +47,8 @@ router.get('/summary', async (req, res) => {
     if (period === 'day') {
       dateFilter = `AND ${docEffectiveDate} = CURRENT_DATE`
     } else if (period === 'month') {
-      dateFilter = `AND EXTRACT(MONTH FROM ${docEffectiveDate})::int = EXTRACT(MONTH FROM CURRENT_DATE)::int AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
+      dateFilter = `AND EXTRACT(MONTH FROM ${docEffectiveDate})::int = EXTRACT(MONTH FROM CURRENT_DATE)::int
+      AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
     } else if (period === 'year') {
       dateFilter = `AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
     } else if (from && to) {
@@ -97,13 +98,13 @@ router.get('/summary', async (req, res) => {
     const data = result?.rows
     const rows = data || []
 
+    console.log('SUMMARY ROWS FROM DB:', rows.length)
+    console.log('FIRST ROW:', rows[0])
+
     const rowAmount = (r) =>
       Number(r?.total ?? r?.total_amount ?? r?.amount ?? 0) || 0
 
     const normalizeStatus = (s) => String(s ?? '').trim().toLowerCase()
-
-    console.log('[reports/summary] rows.length:', rows.length)
-    console.log('[reports/summary] first 3 rows:', rows.slice(0, 3))
 
     const isEligible = (r) => {
       const sos = String(r?.sales_order_status ?? 'active').toLowerCase()
