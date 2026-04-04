@@ -36,8 +36,6 @@ router.get('/summary', async (req, res) => {
 
     logTenantAccess('GET /api/reports/summary', req)
 
-    console.log('period:', req.query.period)
-
     const { from, to, period } = req.query
 
     let dateFilter = ''
@@ -47,15 +45,27 @@ router.get('/summary', async (req, res) => {
     const docEffectiveDate = `COALESCE(d.doc_date, (d.created_at)::date)`
 
     if (period === 'day') {
-      dateFilter = `AND (d.created_at::date = CURRENT_DATE)`
+      dateFilter = `AND ${docEffectiveDate} = CURRENT_DATE`
     } else if (period === 'month') {
-      dateFilter = `AND EXTRACT(MONTH FROM d.created_at)::int = EXTRACT(MONTH FROM CURRENT_TIMESTAMP)::int AND EXTRACT(YEAR FROM d.created_at)::int = EXTRACT(YEAR FROM CURRENT_TIMESTAMP)::int`
+      dateFilter = `AND EXTRACT(MONTH FROM ${docEffectiveDate})::int = EXTRACT(MONTH FROM CURRENT_DATE)::int AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
     } else if (period === 'year') {
-      dateFilter = `AND EXTRACT(YEAR FROM d.created_at)::int = EXTRACT(YEAR FROM CURRENT_TIMESTAMP)::int`
+      dateFilter = `AND EXTRACT(YEAR FROM ${docEffectiveDate})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
     } else if (from && to) {
       params.push(from, to)
       dateFilter = `AND ${docEffectiveDate} BETWEEN $2::date AND $3::date`
     }
+
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.set('Pragma', 'no-cache')
+    res.set('Expires', '0')
+    res.set('Surrogate-Control', 'no-store')
+
+    console.log('[reports/summary] period, from, to:', {
+      period: period ?? null,
+      from: from ?? null,
+      to: to ?? null,
+    })
+    console.log('[reports/summary] final params:', params)
 
     let result
     try {
@@ -90,8 +100,8 @@ router.get('/summary', async (req, res) => {
     const rowAmount = (r) =>
       Number(r?.total ?? r?.total_amount ?? r?.amount ?? 0) || 0
 
-    console.log('SUMMARY ROWS:', rows.length)
-    console.log('SUMMARY SAMPLE:', rows[0])
+    console.log('[reports/summary] rows.length:', rows.length)
+    console.log('[reports/summary] first 3 rows:', rows.slice(0, 3))
 
     const isEligible = (r) => {
       const sos = String(r?.sales_order_status ?? 'active').toLowerCase()
@@ -136,6 +146,12 @@ router.get('/summary', async (req, res) => {
         vat_sales += rowAmount(r) - Number(r?.subtotal ?? 0)
       }
     }
+
+    console.log('[reports/summary] computed:', {
+      total_amount,
+      paid_amount,
+      unpaid_amount,
+    })
 
     res.json({
       total_amount,
