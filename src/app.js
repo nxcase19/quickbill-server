@@ -22,29 +22,33 @@ const app = express()
 
 const corsOptions = {
   origin: (origin, callback) => {
+    console.log('[CORS CHECK]', origin)
+
     if (!origin) return callback(null, true)
 
     try {
       const url = new URL(origin)
       const host = url.host
 
-      // localhost
+      // allow localhost
       if (host.includes('localhost') || host.includes('127.0.0.1')) {
         return callback(null, true)
       }
 
-      // main domain
+      // allow main domain
       if (host.endsWith('quickbill.dev')) {
         return callback(null, true)
       }
 
-      // vercel deployments (IMPORTANT)
-      if (host.endsWith('.vercel.app') && host.includes('quickbill')) {
+      // allow ALL vercel (temporary fix for stability)
+      if (host.endsWith('.vercel.app')) {
         return callback(null, true)
       }
 
+      console.warn('[CORS BLOCKED]', host)
       return callback(null, false)
-    } catch {
+    } catch (err) {
+      console.warn('[CORS ERROR]', origin)
       return callback(null, false)
     }
   },
