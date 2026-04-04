@@ -1,6 +1,6 @@
 /**
- * Billing / plan rules — effective access is driven by subscription + trial, not plan_type alone.
- * DB columns: accounts.plan_type, trial_*, subscription_id, subscription_ends_at, cancel_at_period_end.
+ * Billing / plan rules — trial window + subscription_ends_at for paid access (subscription_id not required).
+ * DB columns: accounts.plan_type, trial_*, subscription_ends_at, cancel_at_period_end.
  */
 
 import { safeQuery } from './tenantQuery.js'
@@ -62,49 +62,46 @@ function normalizePaidEffectivePlan(raw) {
   return 'pro'
 }
 
-function logPlanCheck(row, effective) {
-  console.log('[PLAN CHECK]', {
-    plan_type: row?.plan_type,
-    trial_ends_at: row?.trial_ends_at,
-    subscription_id: row?.subscription_id,
-    subscription_ends_at: row?.subscription_ends_at,
-    effective,
-  })
-}
-
 /**
- * Effective tier: active trial (stored plan_type trial + trial_ends_at future) → then active subscription → else free.
+ * Effective tier: trial → paid if subscription_ends_at in future → legacy pro/business by plan_type → free.
  * @param {object|null|undefined} row
  * @returns {'free'|'trial'|'basic'|'pro'}
  */
 export function getEffectivePlan(row) {
   if (!row) {
-    logPlanCheck(null, 'free')
+    console.log('[PLAN CHECK]', { effective: 'free', reason: 'no row' })
     return 'free'
   }
 
   const now = new Date()
   const planTypeRaw = String(row.plan_type ?? '').toLowerCase()
 
+  // 1. Trial
   if (planTypeRaw === 'trial' && row.trial_ends_at) {
     const trialEnd = new Date(row.trial_ends_at)
     if (!Number.isNaN(trialEnd.getTime()) && trialEnd > now) {
-      logPlanCheck(row, 'trial')
+      console.log('[PLAN CHECK]', { ...row, effective: 'trial' })
       return 'trial'
     }
   }
 
-  const subId = row.subscription_id != null && String(row.subscription_id).trim() !== ''
-  if (subId && row.subscription_ends_at) {
+  // 2. Paid by subscription_ends_at ONLY (ignore subscription_id)
+  if (row.subscription_ends_at) {
     const subEnd = new Date(row.subscription_ends_at)
     if (!Number.isNaN(subEnd.getTime()) && subEnd > now) {
       const paid = normalizePaidEffectivePlan(row.plan_type || 'pro')
-      logPlanCheck(row, paid)
+      console.log('[PLAN CHECK]', { ...row, effective: paid, reason: 'subscription_ends_at' })
       return paid
     }
   }
 
-  logPlanCheck(row, 'free')
+  // 3. Fallback: plan_type = pro (for legacy / broken stripe)
+  if (planTypeRaw === 'pro' || planTypeRaw === 'business') {
+    console.log('[PLAN CHECK]', { ...row, effective: 'pro', reason: 'fallback plan_type' })
+    return 'pro'
+  }
+
+  console.log('[PLAN CHECK]', { ...row, effective: 'free' })
   return 'free'
 }
 
