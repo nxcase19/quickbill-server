@@ -56,8 +56,7 @@ router.get('/summary', async (req, res) => {
         COALESCE(d.doc_date, d.created_at) AS date,
         d.vat_amount
       FROM documents d
-      WHERE ${tw.clause}
-        AND LOWER(d.doc_type) IN ('rc', 'receipt')`,
+      WHERE ${tw.clause}`,
         params,
       )
     } catch (dbErr) {
@@ -94,11 +93,10 @@ router.get('/summary', async (req, res) => {
     )
 
     const paid_amount = validRows
-      .filter((r) =>
-        String(r.status ?? '')
-          .toLowerCase()
-          .includes('paid'),
-      )
+      .filter((r) => {
+        const st = String(r.status ?? '').trim().toLowerCase()
+        return st === 'paid'
+      })
       .reduce((sum, r) => sum + Number(r.total || 0), 0)
 
     const unpaid_amount = total_amount - paid_amount
