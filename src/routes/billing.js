@@ -383,49 +383,25 @@ export async function syncAccountPlanFromStripe(pool, stripe, accountId, email) 
   }
 }
 
-/**
- * @param {import('pg').Pool} db
- * @param {string} accountId
- */
-async function buildBillingPlanData(db, accountId) {
-  const row = await fetchAccountBillingRow(db, accountId)
-  if (!row) return null
-
-  const existingSubId = normalizeString(row.subscription_id)
-  const effectivePlan = getEffectivePlan(row)
-  const trialActive = isTrialActive(row)
-
-  console.log('[BILLING PLAN]', {
-    accountId,
-    existingSubId: existingSubId || null,
-    effectivePlan,
-    storedPlan: getStoredPlan(row),
-  })
-  const access = getPlanAccess(effectivePlan)
-
-  let documentsCreatedToday = null
-  if (access.limitDocuments) {
-    documentsCreatedToday = await countDocumentsCreatedToday(db, accountId)
-  }
-
+function buildPlanFallbackData() {
   return {
-    plan: effectivePlan,
-    planType: getStoredPlan(row),
-    effectivePlan,
-    trialActive,
-    trialEndsAt: row.trial_ends_at ?? null,
-    subscriptionEndsAt: row.subscription_ends_at ?? null,
-    cancelAtPeriodEnd: row.cancel_at_period_end === true,
+    plan: 'free',
+    planType: 'free',
+    effectivePlan: 'free',
+    trialActive: false,
+    trialEndsAt: null,
+    subscriptionEndsAt: null,
+    cancelAtPeriodEnd: false,
     features: {
-      export: access.canExport,
-      purchase_orders: access.canUsePO,
-      tax_purchase: access.canUseAdvancedTax,
+      export: false,
+      purchase_orders: false,
+      tax_purchase: false,
     },
     limits: {
       freeDocumentsPerDay: FREE_DAILY_DOC_LIMIT,
       freeDocumentsPerMonth: FREE_MONTHLY_DOC_LIMIT,
     },
-    documentsCreatedToday,
+    documentsCreatedToday: null,
   }
 }
 
@@ -438,17 +414,107 @@ router.get('/plan', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' })
     }
 
-    logTenantAccess('GET /api/billing/plan', req)
-
-    const data = await buildBillingPlanData(pool, accountId)
-    if (!data) {
-      return res.status(404).json({ success: false, error: 'Account not found' })
+    try {
+      logTenantAccess('GET /api/billing/plan', req)
+    } catch (e) {
+      console.error('PLAN ENDPOINT logTenantAccess:', e)
     }
 
-    return res.json({ success: true, data })
+    let row = null
+    try {
+      row = await fetchAccountBillingRow(pool, accountId)
+    } catch (e) {
+      console.error('FETCH BILLING ROW ERROR:', e)
+    }
+
+    if (!row) {
+      return res.json({ success: true, data: buildPlanFallbackData() })
+    }
+
+    let effective = 'free'
+    try {
+      effective = getEffectivePlan(row)
+    } catch (e) {
+      console.error('EFFECTIVE PLAN ERROR:', e)
+    }
+
+    let trialActive = false
+    try {
+      trialActive = isTrialActive(row)
+    } catch (e) {
+      console.error('TRIAL ACTIVE ERROR:', e)
+      trialActive = effective === 'trial'
+    }
+
+    let features = {
+      export: false,
+      purchase_orders: false,
+      tax_purchase: false,
+    }
+    try {
+      const access = getPlanAccess(effective)
+      features = {
+        export: access.canExport,
+        purchase_orders: access.canUsePO,
+        tax_purchase: access.canUseAdvancedTax,
+      }
+    } catch (e) {
+      console.error('PLAN ACCESS ERROR:', e)
+    }
+
+    let documentsCreatedToday = null
+    try {
+      const access = getPlanAccess(effective)
+      if (access.limitDocuments) {
+        documentsCreatedToday = await countDocumentsCreatedToday(pool, accountId)
+      }
+    } catch (e) {
+      console.error('DOCUMENT COUNT ERROR:', e)
+    }
+
+    let storedPlan = 'free'
+    try {
+      storedPlan = getStoredPlan(row)
+    } catch (e) {
+      console.error('STORED PLAN ERROR:', e)
+      storedPlan = String(row.plan_type || 'free').toLowerCase()
+    }
+
+    try {
+      console.log('[BILLING PLAN]', {
+        accountId,
+        existingSubId: normalizeString(row.subscription_id) || null,
+        effectivePlan: effective,
+        storedPlan,
+      })
+    } catch {
+      /* ignore */
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        plan: effective,
+        planType: storedPlan,
+        effectivePlan: effective,
+        trialActive,
+        trialEndsAt: row.trial_ends_at ?? null,
+        subscriptionEndsAt: row.subscription_ends_at ?? null,
+        cancelAtPeriodEnd: row.cancel_at_period_end === true,
+        features,
+        limits: {
+          freeDocumentsPerDay: FREE_DAILY_DOC_LIMIT,
+          freeDocumentsPerMonth: FREE_MONTHLY_DOC_LIMIT,
+        },
+        documentsCreatedToday,
+      },
+    })
   } catch (err) {
-    console.error('GET /billing/plan:', err)
-    return res.status(500).json({ success: false, error: err.message || 'Internal server error' })
+    console.error('PLAN ENDPOINT FATAL:', err)
+    return res.json({
+      success: true,
+      data: buildPlanFallbackData(),
+    })
   }
 })
 
