@@ -344,15 +344,12 @@ router.get('/export', assertCanExport, async (req, res) => {
 
     sheet.getRow(sheet.lastRow.number).font = { bold: true }
 
+    const filename = exportStandardXlsxFilename('documents')
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
-
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${exportStandardXlsxFilename('documents')}"`,
-    )
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
     res.end()
@@ -499,14 +496,12 @@ router.get('/vat-sales/export', assertCanExport, async (req, res) => {
     sheet.getColumn('vat_amount').numFmt = '#,##0.00'
     sheet.getColumn('total').numFmt = '#,##0.00'
 
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${exportStandardXlsxFilename('salevat')}"`,
-    )
+    const filename = exportStandardXlsxFilename('salevat')
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
     res.end()
@@ -591,14 +586,12 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
     sheet.getColumn('vat_amount').numFmt = '#,##0.00'
     sheet.getColumn('total').numFmt = '#,##0.00'
 
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${exportStandardXlsxFilename('purchasevat')}"`,
-    )
+    const filename = exportStandardXlsxFilename('purchasevat')
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
     res.end()
@@ -764,14 +757,12 @@ router.get('/pp30/export', assertCanExport, async (req, res) => {
     sheet.getColumn('amount').numFmt = '#,##0.00'
     sheet.getRow(5).font = { bold: true }
 
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${buildPp30ExportFilename(month)}"`,
-    )
+    const filename = buildPp30ExportFilename(month)
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`)
 
     await workbook.xlsx.write(res)
     res.end()
