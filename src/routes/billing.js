@@ -466,14 +466,23 @@ router.post('/cancel-subscription', async (req, res) => {
     })
 
     if (!subscriptionId) {
-      return res.status(400).json({ success: false, error: 'No subscription_id for this account' })
+      return res.status(400).json({
+        success: false,
+        error: 'ไม่พบแพ็กเกจที่กำลังใช้งาน',
+      })
     }
 
     await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true })
 
+    await pool.query(
+      `UPDATE accounts SET cancel_at_period_end = true WHERE id = $1::uuid`,
+      [accountId],
+    )
+
     return res.json({
       success: true,
       message: 'Subscription will cancel at period end',
+      cancelAtPeriodEnd: true,
     })
   } catch (err) {
     console.error('POST /cancel-subscription:', err)
@@ -753,6 +762,13 @@ export async function handleStripeWebhook(req, res) {
         sub,
         pool,
       )
+
+      console.log('[PLAN UPDATED FROM STRIPE]', {
+        event: 'customer.subscription.updated',
+        account_id: accountId,
+        cancel_at_period_end: cancelAtEnd,
+        subscription_id: subscriptionId || null,
+      })
 
       console.log('[stripe] customer.subscription.updated', {
         account_id: accountId,
