@@ -53,7 +53,8 @@ router.get('/summary', async (req, res) => {
         d.total,
         d.status,
         d.doc_type,
-        COALESCE(d.doc_date, d.created_at) AS date
+        COALESCE(d.doc_date, d.created_at) AS date,
+        d.vat_amount
       FROM documents d
       WHERE ${tw.clause}`,
         params,
@@ -82,8 +83,9 @@ router.get('/summary', async (req, res) => {
 
     console.log('VALID ROWS:', validRows.length)
 
-    const rowAmount = (r) =>
-      Number(r?.total ?? r?.total_amount ?? r?.amount ?? 0) || 0
+    const vat_sales = validRows.reduce((sum, r) => {
+      return sum + Number(r.vat_amount || r.vat || 0)
+    }, 0)
 
     const total_amount = validRows.reduce(
       (sum, r) => sum + Number(r.total || 0),
@@ -100,30 +102,25 @@ router.get('/summary', async (req, res) => {
 
     const unpaid_amount = total_amount - paid_amount
 
-    let vat_sales = 0
-    for (const r of rows) {
-      if (
-        r?.vat_enabled === true &&
-        String(r?.doc_type ?? '').toUpperCase() === 'RC' &&
-        Number(r?.paid_amount || 0) >= rowAmount(r) &&
-        String(r?.sales_order_status ?? 'active').toLowerCase() !== 'cancelled' &&
-        String(r?.status ?? '') !== 'cancelled'
-      ) {
-        vat_sales += rowAmount(r) - Number(r?.subtotal ?? 0)
-      }
-    }
+    const round = (num) => Math.round(num * 100) / 100
+
+    const total_amount_rounded = round(total_amount)
+    const paid_amount_rounded = round(paid_amount)
+    const unpaid_amount_rounded = round(unpaid_amount)
+
+    const vat_sales_rounded = round(vat_sales)
 
     console.log('[reports/summary] computed:', {
-      total_amount,
-      paid_amount,
-      unpaid_amount,
+      total_amount: total_amount_rounded,
+      paid_amount: paid_amount_rounded,
+      unpaid_amount: unpaid_amount_rounded,
     })
 
     res.json({
-      total_amount,
-      paid_amount,
-      unpaid_amount,
-      vat_sales,
+      total_amount: total_amount_rounded,
+      paid_amount: paid_amount_rounded,
+      unpaid_amount: unpaid_amount_rounded,
+      vat_sales: vat_sales_rounded,
     })
   } catch (error) {
     if (error?.message === 'Missing account_id') {
