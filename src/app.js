@@ -20,17 +20,31 @@ import { handleStripeWebhook } from './routes/billing.js'
 
 const app = express()
 
-// CORS first — before logging, body parsers, webhooks, and all routes (incl. /api/billing/plan)
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  }),
-)
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true)
 
-app.options('*', cors())
+    const allowed = [
+      'https://quickbill.dev',
+      'https://quickbill-web.vercel.app',
+      'http://localhost:5173',
+    ]
+
+    if (allowed.includes(origin)) {
+      return callback(null, true)
+    }
+
+    return callback(null, false)
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}
+
+// CORS first — before logging, body parsers, webhooks, and all routes (incl. /api/billing/plan)
+// Same options for preflight (OPTIONS) and normal requests so Allow-* headers stay consistent.
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
 
 app.use((req, res, next) => {
   console.log('REQ:', req.method, req.path)
