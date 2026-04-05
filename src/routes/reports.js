@@ -40,45 +40,45 @@ function toYmdLocal(d) {
 }
 
 /**
+ * Same bounds for summary, vat-summary, and exports. Requires `period` query param.
  * @param {Record<string, string | undefined>} query
  * @returns {{ fromYmd: string, toYmd: string } | { error: string }}
  */
 function resolveReportBounds(query) {
   const { period, from, to } = query
+  if (period == null || String(period).trim() === '') {
+    return { error: 'missing period' }
+  }
 
+  const p = String(period).trim()
   let startDate
   let endDate
 
-  if (period === 'day') {
-    startDate = new Date()
-    startDate.setHours(0, 0, 0, 0)
-    endDate = new Date()
-    endDate.setHours(23, 59, 59, 999)
-  } else if (period === 'month') {
-    startDate = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-    startDate.setHours(0, 0, 0, 0)
-    endDate = new Date()
-    endDate.setHours(23, 59, 59, 999)
-  } else if (period === 'year') {
-    startDate = new Date(new Date().getFullYear(), 0, 1)
-    startDate.setHours(0, 0, 0, 0)
-    endDate = new Date()
-    endDate.setHours(23, 59, 59, 999)
-  } else if (period === 'custom') {
+  if (p === 'custom') {
     if (!from || !to) {
-      return { error: 'period=custom requires from and to' }
+      return { error: 'missing from/to' }
     }
     startDate = new Date(from)
     startDate.setHours(0, 0, 0, 0)
     endDate = new Date(to)
     endDate.setHours(23, 59, 59, 999)
-  } else if (from && to) {
-    startDate = new Date(from)
+  } else if (p === 'month') {
+    startDate = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
     startDate.setHours(0, 0, 0, 0)
-    endDate = new Date(to)
+    endDate = new Date()
+    endDate.setHours(23, 59, 59, 999)
+  } else if (p === 'year') {
+    startDate = new Date(new Date().getFullYear(), 0, 1)
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date()
+    endDate.setHours(23, 59, 59, 999)
+  } else if (p === 'day') {
+    startDate = new Date()
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date()
     endDate.setHours(23, 59, 59, 999)
   } else {
-    return { error: 'missing period or from/to' }
+    return { error: 'invalid period' }
   }
 
   if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
@@ -208,7 +208,7 @@ router.get('/vat-summary', async (req, res) => {
             COALESCE(
               SUM(
                 CASE
-                  WHEN COALESCE(d.vat_enabled, false) = true
+                  WHEN d.vat_enabled IS TRUE
                   THEN COALESCE(d.subtotal, 0) * COALESCE(d.vat_rate, 0)
                   ELSE 0
                 END
@@ -272,7 +272,12 @@ router.get('/export', assertCanExport, async (req, res) => {
 
     logTenantAccess('GET /api/reports/export', req)
 
-    const { status, from, to, period, doc_type, vat } = req.query
+    const { status, period, doc_type, vat } = req.query
+    const bounds = resolveReportBounds(req.query)
+    if ('error' in bounds) {
+      return res.status(400).json({ error: bounds.error })
+    }
+    const { fromYmd, toYmd } = bounds
 
     const [{ rows: docCols }, { rows: payCols }] = await Promise.all([
       safeQuery(
@@ -327,6 +332,8 @@ router.get('/export', assertCanExport, async (req, res) => {
       WHERE ${tw.clause}
     `
     const params = [tw.param]
+    params.push(fromYmd, toYmd)
+    sql += ` AND d.doc_date::date BETWEEN $${params.length - 1}::date AND $${params.length}::date`
 
     if (status === 'paid') {
       sql += ` AND d.status = 'paid'`
@@ -343,19 +350,6 @@ router.get('/export', assertCanExport, async (req, res) => {
       sql += ` AND d.vat_enabled = true`
     } else if (vat === 'no_vat' && hasVatEnabled) {
       sql += ` AND (d.vat_enabled = false OR d.vat_enabled IS NULL)`
-    }
-
-    if (period === 'day') {
-      sql += ` AND d.doc_date = CURRENT_DATE`
-    } else if (period === 'month') {
-      sql += ` AND date_trunc('month', d.doc_date) = date_trunc('month', CURRENT_DATE)`
-    } else if (period === 'year') {
-      sql += ` AND date_trunc('year', d.doc_date) = date_trunc('year', CURRENT_DATE)`
-    }
-
-    if (from && to) {
-      params.push(from, to)
-      sql += ` AND d.doc_date BETWEEN $${params.length - 1} AND $${params.length}`
     }
 
     sql += `
@@ -379,7 +373,7 @@ router.get('/export', assertCanExport, async (req, res) => {
     const sheet = workbook.addWorksheet('Sales')
 
     sheet.addRow(['รายงานยอดขาย'])
-    sheet.addRow([`วันที่: ${from || '-'} ถึง ${to || '-'}`])
+    sheet.addRow([`วันที่: ${fromYmd} ถึง ${toYmd} (period=${period ?? '-'})`])
     sheet.addRow([])
 
     sheet.getRow(1).font = { bold: true, size: 16 }
@@ -531,7 +525,14 @@ router.get('/vat-sales/export', assertCanExport, async (req, res) => {
   try {
     requireAccountId(req)
 
+    const bounds = resolveReportBounds(req.query)
+    if ('error' in bounds) {
+      return res.status(400).json({ error: bounds.error })
+    }
+    const { fromYmd, toYmd } = bounds
+
     const tw = buildTenantWhereClause(req, 'd', 1)
+    const params = [tw.param, fromYmd, toYmd]
     const { rows } = await safeQuery(
       pool,
       `
@@ -540,16 +541,16 @@ router.get('/vat-sales/export', assertCanExport, async (req, res) => {
         d.doc_no,
         d.customer_name,
         d.subtotal,
-        (d.total - d.subtotal) AS vat_amount,
+        COALESCE(d.subtotal, 0) * COALESCE(d.vat_rate, 0) AS vat_amount,
         d.total
       FROM documents d
       WHERE ${tw.clause}
-        AND d.vat_enabled = true
+        AND d.vat_enabled IS TRUE
         AND d.doc_type = 'RC'
-        AND d.paid_amount >= d.total
+        AND d.doc_date::date BETWEEN $2::date AND $3::date
       ORDER BY d.doc_date ASC
     `,
-      [tw.param],
+      params,
     )
 
     const workbook = new ExcelJS.Workbook()
@@ -603,12 +604,18 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
   try {
     requireAccountId(req)
 
+    const bounds = resolveReportBounds(req.query)
+    if ('error' in bounds) {
+      return res.status(400).json({ error: bounds.error })
+    }
+    const { fromYmd, toYmd } = bounds
+
     logTenantAccess('GET /api/reports/vat-purchase/export', req, {
-      from: req.query.from,
-      to: req.query.to,
+      period: req.query.period,
+      from: fromYmd,
+      to: toYmd,
     })
 
-    const { from, to } = req.query
     const tw = buildTenantWhereClause(req, 'p', 1)
     const purchaseDateExpr = `COALESCE(p.doc_date, (p.created_at)::date)`
 
@@ -674,18 +681,8 @@ router.get('/vat-purchase/export', assertCanExport, assertCanUseTaxPurchase, asy
         AND COALESCE(p.vat_amount, 0) > 0
         AND (p.deleted_at IS NULL)
     `
-    const params = [tw.param]
-
-    if (from && to) {
-      sql += ` AND ${purchaseDateExpr} >= $${params.length + 1}::date AND ${purchaseDateExpr} <= $${params.length + 2}::date`
-      params.push(String(from).slice(0, 10), String(to).slice(0, 10))
-    } else if (from) {
-      sql += ` AND ${purchaseDateExpr} >= $${params.length + 1}::date`
-      params.push(String(from).slice(0, 10))
-    } else if (to) {
-      sql += ` AND ${purchaseDateExpr} <= $${params.length + 1}::date`
-      params.push(String(to).slice(0, 10))
-    }
+    const params = [tw.param, fromYmd, toYmd]
+    sql += ` AND ${purchaseDateExpr}::date BETWEEN $2::date AND $3::date`
 
     sql += ` ORDER BY ${purchaseDateExpr} ASC NULLS LAST, p.id ASC`
 
