@@ -40,38 +40,55 @@ function toYmdLocal(d) {
 }
 
 /**
- * Inclusive date range for reports. Always returns from/to (defaults to current month if no query).
  * @param {Record<string, string | undefined>} query
+ * @returns {{ fromYmd: string, toYmd: string } | { error: string }}
  */
-function resolveReportDateRange(query) {
-  const { from, to, period } = query
-  if (from && to) {
-    return {
-      from: String(from).slice(0, 10),
-      to: String(to).slice(0, 10),
-    }
-  }
-  const now = new Date()
+function resolveReportBounds(query) {
+  const { period, from, to } = query
+
+  let startDate
+  let endDate
+
   if (period === 'day') {
-    const s = toYmdLocal(now)
-    return { from: s, to: s }
+    startDate = new Date()
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date()
+    endDate.setHours(23, 59, 59, 999)
+  } else if (period === 'month') {
+    startDate = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date()
+    endDate.setHours(23, 59, 59, 999)
+  } else if (period === 'year') {
+    startDate = new Date(new Date().getFullYear(), 0, 1)
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date()
+    endDate.setHours(23, 59, 59, 999)
+  } else if (period === 'custom') {
+    if (!from || !to) {
+      return { error: 'period=custom requires from and to' }
+    }
+    startDate = new Date(from)
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date(to)
+    endDate.setHours(23, 59, 59, 999)
+  } else if (from && to) {
+    startDate = new Date(from)
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date(to)
+    endDate.setHours(23, 59, 59, 999)
+  } else {
+    return { error: 'missing period or from/to' }
   }
-  if (period === 'month') {
-    const y = now.getFullYear()
-    const mo = now.getMonth()
-    const start = new Date(y, mo, 1)
-    const end = new Date(y, mo + 1, 0)
-    return { from: toYmdLocal(start), to: toYmdLocal(end) }
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return { error: 'invalid from/to date' }
   }
-  if (period === 'year') {
-    const y = now.getFullYear()
-    return { from: `${y}-01-01`, to: `${y}-12-31` }
+
+  return {
+    fromYmd: toYmdLocal(startDate),
+    toYmd: toYmdLocal(endDate),
   }
-  const y = now.getFullYear()
-  const mo = now.getMonth()
-  const start = new Date(y, mo, 1)
-  const end = new Date(y, mo + 1, 0)
-  return { from: toYmdLocal(start), to: toYmdLocal(end) }
 }
 
 const router = Router()
@@ -82,9 +99,15 @@ router.get('/summary', async (req, res) => {
 
     logTenantAccess('GET /api/reports/summary', req)
 
+    const { period, from, to } = req.query
+    const bounds = resolveReportBounds(req.query)
+    if ('error' in bounds) {
+      return res.status(400).json({ error: bounds.error })
+    }
+    const { fromYmd, toYmd } = bounds
+
     const tw = buildTenantWhereClause(req, 'd', 1)
-    const { from: rangeFrom, to: rangeTo } = resolveReportDateRange(req.query)
-    const params = [tw.param, rangeFrom, rangeTo]
+    const params = [tw.param, fromYmd, toYmd]
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.set('Pragma', 'no-cache')
@@ -114,7 +137,7 @@ router.get('/summary', async (req, res) => {
         FROM documents d
         WHERE ${tw.clause}
           AND d.doc_type = 'RC'
-          AND d.doc_date BETWEEN $2::date AND $3::date`,
+          AND d.doc_date::date BETWEEN $2::date AND $3::date`,
         params,
       )
     } catch (dbErr) {
@@ -132,9 +155,11 @@ router.get('/summary', async (req, res) => {
     const unpaid_amount = round2(agg.unpaid_amount)
 
     console.log('[reports/summary]', {
-      period: req.query.period ?? null,
-      from: rangeFrom,
-      to: rangeTo,
+      period: period ?? null,
+      from: from ?? null,
+      to: to ?? null,
+      fromYmd,
+      toYmd,
       account_id: getAccountId(req),
       total_amount,
       paid_amount,
@@ -163,11 +188,17 @@ router.get('/vat-summary', async (req, res) => {
   try {
     requireAccountId(req)
 
+    const { period, from, to } = req.query
+    const bounds = resolveReportBounds(req.query)
+    if ('error' in bounds) {
+      return res.status(400).json({ error: bounds.error })
+    }
+    const { fromYmd, toYmd } = bounds
+
     const twDoc = buildTenantWhereClause(req, 'd', 1)
     const twPur = buildTenantWhereClause(req, 'p', 1)
-    const { from: rangeFrom, to: rangeTo } = resolveReportDateRange(req.query)
-    const salesParams = [twDoc.param, rangeFrom, rangeTo]
-    const purchaseParams = [twPur.param, rangeFrom, rangeTo]
+    const salesParams = [twDoc.param, fromYmd, toYmd]
+    const purchaseParams = [twPur.param, fromYmd, toYmd]
 
     const [{ rows: salesRows }, { rows: purchaseRows }] = await Promise.all([
       safeQuery(
@@ -189,7 +220,7 @@ router.get('/vat-summary', async (req, res) => {
         FROM documents d
         WHERE ${twDoc.clause}
           AND d.doc_type = 'RC'
-          AND d.doc_date BETWEEN $2::date AND $3::date`,
+          AND d.doc_date::date BETWEEN $2::date AND $3::date`,
         salesParams,
       ),
       safeQuery(
@@ -198,7 +229,7 @@ router.get('/vat-summary', async (req, res) => {
           ROUND(COALESCE(SUM(COALESCE(p.vat_amount, 0)), 0)::numeric, 2) AS vat_purchase
         FROM purchase_invoices p
         WHERE ${twPur.clause}
-          AND p.doc_date BETWEEN $2::date AND $3::date
+          AND p.doc_date::date BETWEEN $2::date AND $3::date
           AND (COALESCE(p.status, 'active') = 'active')
           AND (COALESCE(p.document_status, 'issued') = 'issued')`,
         purchaseParams,
@@ -210,9 +241,11 @@ router.get('/vat-summary', async (req, res) => {
     const vat_payable = round2(vat_sales - vat_purchase)
 
     console.log('[reports/vat-summary]', {
-      period: req.query.period ?? null,
-      from: rangeFrom,
-      to: rangeTo,
+      period: period ?? null,
+      from: from ?? null,
+      to: to ?? null,
+      fromYmd,
+      toYmd,
       account_id: getAccountId(req),
       vat_sales,
       vat_purchase,
