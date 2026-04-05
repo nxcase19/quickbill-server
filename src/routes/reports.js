@@ -72,6 +72,21 @@ function round2(num) {
   return Math.round(Number(num) * 100) / 100
 }
 
+/** Period on `d.doc_date` for GET /summary only (DATE_TRUNC per product spec). */
+function summaryRcDocDatePeriodAnd(query) {
+  const { period } = query
+  if (period === 'day') {
+    return ` AND DATE_TRUNC('day', d.doc_date) = DATE_TRUNC('day', NOW())`
+  }
+  if (period === 'month') {
+    return ` AND DATE_TRUNC('month', d.doc_date) = DATE_TRUNC('month', NOW())`
+  }
+  if (period === 'year') {
+    return ` AND DATE_TRUNC('year', d.doc_date) = DATE_TRUNC('year', NOW())`
+  }
+  return ''
+}
+
 const router = Router()
 
 router.get('/summary', async (req, res) => {
@@ -82,8 +97,7 @@ router.get('/summary', async (req, res) => {
 
     const tw = buildTenantWhereClause(req, 'd', 1)
     const params = [tw.param]
-    const periodAnd = periodFilterAnd(req.query, params)
-    const scopeAnd = canonicalSalesReceiptScopeAnd()
+    const periodAnd = summaryRcDocDatePeriodAnd(req.query)
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.set('Pragma', 'no-cache')
@@ -95,27 +109,24 @@ router.get('/summary', async (req, res) => {
       result = await safeQuery(
         pool,
         `SELECT
-          ROUND(
-            COALESCE(SUM(COALESCE(d.total, 0)), 0)::numeric,
-            2
-          ) AS total_sum,
+          ROUND(COALESCE(SUM(d.total), 0)::numeric, 2) AS total_amount,
           ROUND(
             COALESCE(
-              SUM(
-                CASE
-                  WHEN COALESCE(d.vat_enabled, false) = true
-                    AND COALESCE(d.vat_rate, 0)::numeric = 0.07::numeric
-                  THEN COALESCE(d.vat_amount, 0)
-                  ELSE 0
-                END
-              ),
+              SUM(CASE WHEN d.status = 'paid' THEN d.total ELSE 0 END),
               0
             )::numeric,
             2
-          ) AS vat_sum
+          ) AS paid_amount,
+          ROUND(
+            COALESCE(
+              SUM(CASE WHEN d.status != 'paid' THEN d.total ELSE 0 END),
+              0
+            )::numeric,
+            2
+          ) AS unpaid_amount
         FROM documents d
         WHERE ${tw.clause}
-        ${scopeAnd}
+          AND d.doc_type = 'RC'
         ${periodAnd}`,
         params,
       )
@@ -125,32 +136,26 @@ router.get('/summary', async (req, res) => {
         total_amount: 0,
         paid_amount: 0,
         unpaid_amount: 0,
-        vat_sales: 0,
       })
     }
 
     const agg = result?.rows?.[0] || {}
-    const total_amount_rounded = round2(agg.total_sum)
-    const paid_amount_rounded = total_amount_rounded
-    const unpaid_amount_rounded = 0
-    const vat_sales_rounded = round2(agg.vat_sum)
+    const total_amount = round2(agg.total_amount)
+    const paid_amount = round2(agg.paid_amount)
+    const unpaid_amount = round2(agg.unpaid_amount)
 
     console.log('[reports/summary]', {
       period: req.query.period ?? null,
-      from: req.query.from ?? null,
-      to: req.query.to ?? null,
       account_id: getAccountId(req),
-      total_amount: total_amount_rounded,
-      paid_amount: paid_amount_rounded,
-      unpaid_amount: unpaid_amount_rounded,
-      vat_sales: vat_sales_rounded,
+      total_amount,
+      paid_amount,
+      unpaid_amount,
     })
 
     res.json({
-      total_amount: total_amount_rounded,
-      paid_amount: paid_amount_rounded,
-      unpaid_amount: unpaid_amount_rounded,
-      vat_sales: vat_sales_rounded,
+      total_amount,
+      paid_amount,
+      unpaid_amount,
     })
   } catch (error) {
     if (error?.message === 'Missing account_id') {
@@ -161,7 +166,6 @@ router.get('/summary', async (req, res) => {
       total_amount: 0,
       paid_amount: 0,
       unpaid_amount: 0,
-      vat_sales: 0,
     })
   }
 })
