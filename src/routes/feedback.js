@@ -1,7 +1,6 @@
 import nodemailer from 'nodemailer'
 import { Router } from 'express'
 import { pool } from '../db.js'
-import { requireAccountId } from '../utils/tenantQuery.js'
 
 const router = Router()
 
@@ -39,8 +38,6 @@ function getFeedbackMailer() {
 
 router.post('/', async (req, res) => {
   try {
-    const accountId = requireAccountId(req)
-
     const typeRaw = req.body?.type
     const messageRaw = req.body?.message
     const pageRaw = req.body?.page
@@ -64,6 +61,13 @@ router.post('/', async (req, res) => {
     const pageForDb =
       pageSafe.length > 0 ? pageSafe.slice(0, FEEDBACK_PAGE_MAX) : null
 
+    const userId = req.user?.user_id || null
+    const accountId = req.user?.account_id || null
+
+    if (!accountId) {
+      return res.status(401).json({ error: 'unauthorized' })
+    }
+
     const rateKey = String(req.user?.user_id ?? accountId ?? '')
     const now = Date.now()
     const windowMs = 60 * 1000
@@ -86,22 +90,32 @@ router.post('/', async (req, res) => {
       return res.status(429).json({ error: 'too many requests' })
     }
 
-    const userId =
-      req.user?.user_id != null && req.user.user_id !== ''
-        ? String(req.user.user_id)
-        : null
-
     console.log('[feedback]', {
       type: typeSafe,
       user: req.user?.user_id,
       page: pageForDb || pageSafe || '',
     })
 
-    await pool.query(
-      `INSERT INTO feedbacks (account_id, user_id, type, message, page, status)
-       VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, 'open')`,
-      [String(accountId), userId, typeSafe, messageSafe, pageForDb],
-    )
+    console.log('[feedback-debug]', {
+      user: req.user,
+    })
+
+    try {
+      await pool.query(
+        `INSERT INTO feedbacks (account_id, user_id, type, message, page, status)
+         VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, 'open')`,
+        [
+          String(accountId),
+          userId != null && userId !== '' ? String(userId) : null,
+          typeSafe,
+          messageSafe,
+          pageForDb,
+        ],
+      )
+    } catch (err) {
+      console.error('[feedback-insert-error]', err.message)
+      return res.status(500).json({ error: 'failed to save feedback' })
+    }
 
     res.json({ success: true })
 
@@ -133,13 +147,6 @@ router.post('/', async (req, res) => {
       }
     })
   } catch (e) {
-    if (e?.message === 'Missing account_id') {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized',
-        message: 'Missing account',
-      })
-    }
     console.error('[feedback]', String(e?.message || e).slice(0, 200))
     res.status(500).json({
       success: false,
