@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import ExcelJS from 'exceljs'
 import { pool } from '../db.js'
-import { buildTenantWhereClause } from '../utils/tenant.js'
+import { buildTenantWhereClause, getAccountId } from '../utils/tenant.js'
 import { logTenantAccess } from '../utils/tenantDebug.js'
 import { requireAccountId, safeQuery } from '../utils/tenantQuery.js'
 import { assertCanExport, assertCanUseTaxPurchase } from '../middleware/planGuards.js'
@@ -28,6 +28,50 @@ function buildPp30ExportFilename(month) {
   return `pp30-${month}-${getTimestamp()}.xlsx`
 }
 
+/** Canonical document date for period filters (alias `d`). */
+const DOC_EFFECTIVE_DATE_SQL = 'COALESCE(d.doc_date, (d.created_at)::date)'
+
+/**
+ * Sales receipt scope: RC only, not cancelled (order + payment status). Append after `WHERE` + tenant.
+ * @returns {string} SQL fragment starting with `AND ...`
+ */
+function canonicalSalesReceiptScopeAnd() {
+  return `AND d.doc_type = 'RC'
+      AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
+      AND LOWER(COALESCE(d.status, '')) <> 'cancelled'`
+}
+
+/**
+ * Period filter on `DOC_EFFECTIVE_DATE_SQL` only (SQL). Mutates `params` when `from`/`to` are used.
+ * @param {Record<string, string | undefined>} query
+ * @param {unknown[]} params
+ */
+function periodFilterAnd(query, params) {
+  const { from, to, period } = query
+  const ddt = DOC_EFFECTIVE_DATE_SQL
+  if (period === 'day') {
+    return ` AND ${ddt} = CURRENT_DATE`
+  }
+  if (period === 'month') {
+    return ` AND EXTRACT(MONTH FROM ${ddt})::int = EXTRACT(MONTH FROM CURRENT_DATE)::int
+      AND EXTRACT(YEAR FROM ${ddt})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
+  }
+  if (period === 'year') {
+    return ` AND EXTRACT(YEAR FROM ${ddt})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
+  }
+  if (from && to) {
+    params.push(from, to)
+    const a = params.length - 1
+    const b = params.length
+    return ` AND ${ddt} BETWEEN $${a}::date AND $${b}::date`
+  }
+  return ''
+}
+
+function round2(num) {
+  return Math.round(Number(num) * 100) / 100
+}
+
 const router = Router()
 
 router.get('/summary', async (req, res) => {
@@ -38,6 +82,8 @@ router.get('/summary', async (req, res) => {
 
     const tw = buildTenantWhereClause(req, 'd', 1)
     const params = [tw.param]
+    const periodAnd = periodFilterAnd(req.query, params)
+    const scopeAnd = canonicalSalesReceiptScopeAnd()
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.set('Pragma', 'no-cache')
@@ -49,11 +95,28 @@ router.get('/summary', async (req, res) => {
       result = await safeQuery(
         pool,
         `SELECT
-          COALESCE(SUM(d.total), 0) AS total_sum,
-          COALESCE(SUM(d.vat_amount), 0) AS vat_sum
+          ROUND(
+            COALESCE(SUM(COALESCE(d.total, 0)), 0)::numeric,
+            2
+          ) AS total_sum,
+          ROUND(
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN COALESCE(d.vat_enabled, false) = true
+                    AND COALESCE(d.vat_rate, 0)::numeric = 0.07::numeric
+                  THEN COALESCE(d.vat_amount, 0)
+                  ELSE 0
+                END
+              ),
+              0
+            )::numeric,
+            2
+          ) AS vat_sum
         FROM documents d
         WHERE ${tw.clause}
-          AND d.doc_no LIKE 'RC-%'`,
+        ${scopeAnd}
+        ${periodAnd}`,
         params,
       )
     } catch (dbErr) {
@@ -67,28 +130,20 @@ router.get('/summary', async (req, res) => {
     }
 
     const agg = result?.rows?.[0] || {}
-    const total_amount = Number(agg.total_sum || 0)
-    const vat_sales = Number(agg.vat_sum || 0)
-    const paid_amount = total_amount
-    const unpaid_amount = 0
+    const total_amount_rounded = round2(agg.total_sum)
+    const paid_amount_rounded = total_amount_rounded
+    const unpaid_amount_rounded = 0
+    const vat_sales_rounded = round2(agg.vat_sum)
 
-    console.log('SUMMARY RC (doc_no LIKE RC-%):', {
-      total_amount,
-      vat_sales,
-    })
-
-    const round = (num) => Math.round(num * 100) / 100
-
-    const total_amount_rounded = round(total_amount)
-    const paid_amount_rounded = round(paid_amount)
-    const unpaid_amount_rounded = round(unpaid_amount)
-
-    const vat_sales_rounded = round(vat_sales)
-
-    console.log('[reports/summary] computed:', {
+    console.log('[reports/summary]', {
+      period: req.query.period ?? null,
+      from: req.query.from ?? null,
+      to: req.query.to ?? null,
+      account_id: getAccountId(req),
       total_amount: total_amount_rounded,
       paid_amount: paid_amount_rounded,
       unpaid_amount: unpaid_amount_rounded,
+      vat_sales: vat_sales_rounded,
     })
 
     res.json({
@@ -116,23 +171,39 @@ router.get('/vat-summary', async (req, res) => {
     requireAccountId(req)
 
     const twDoc = buildTenantWhereClause(req, 'd', 1)
+    const salesParams = [twDoc.param]
+    const salesPeriodAnd = periodFilterAnd(req.query, salesParams)
+    const scopeAnd = canonicalSalesReceiptScopeAnd()
+
     const twPur = buildTenantWhereClause(req, '', 1)
     const [{ rows: salesRows }, { rows: purchaseRows }] = await Promise.all([
       safeQuery(
         pool,
         `SELECT
-          COALESCE(SUM(total - subtotal), 0) AS vat_sales
+          ROUND(
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN COALESCE(d.vat_enabled, false) = true
+                    AND COALESCE(d.vat_rate, 0)::numeric = 0.07::numeric
+                  THEN COALESCE(d.vat_amount, 0)
+                  ELSE 0
+                END
+              ),
+              0
+            )::numeric,
+            2
+          ) AS vat_sales
         FROM documents d
         WHERE ${twDoc.clause}
-          AND vat_enabled = true
-          AND doc_type = 'RC'
-          AND d.paid_amount >= d.total`,
-        [twDoc.param],
+        ${scopeAnd}
+        ${salesPeriodAnd}`,
+        salesParams,
       ),
       safeQuery(
         pool,
         `SELECT
-          COALESCE(SUM(vat_amount), 0) AS vat_purchase
+          ROUND(COALESCE(SUM(COALESCE(vat_amount, 0)), 0)::numeric, 2) AS vat_purchase
         FROM purchase_invoices
         WHERE ${twPur.clause}
           AND (COALESCE(status, 'active') = 'active')
@@ -141,9 +212,19 @@ router.get('/vat-summary', async (req, res) => {
       ),
     ])
 
-    const vat_sales = Number(salesRows[0]?.vat_sales || 0)
-    const vat_purchase = Number(purchaseRows[0]?.vat_purchase || 0)
-    const vat_payable = vat_sales - vat_purchase
+    const vat_sales = round2(salesRows[0]?.vat_sales)
+    const vat_purchase = round2(purchaseRows[0]?.vat_purchase)
+    const vat_payable = round2(vat_sales - vat_purchase)
+
+    console.log('[reports/vat-summary]', {
+      period: req.query.period ?? null,
+      from: req.query.from ?? null,
+      to: req.query.to ?? null,
+      account_id: getAccountId(req),
+      vat_sales,
+      vat_purchase,
+      vat_payable,
+    })
 
     res.json({
       vat_sales,
