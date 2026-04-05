@@ -72,7 +72,6 @@ export function buildReportDateFilter({
 export function buildRcSalesWhereClause({ alias = 'd' } = {}) {
   const a = alias
   return ` AND ${a}.doc_type = 'RC'
-      AND COALESCE(${a}.sales_order_status, 'active') <> 'cancelled'
       AND LOWER(COALESCE(${a}.status, '')) <> 'cancelled'`
 }
 
