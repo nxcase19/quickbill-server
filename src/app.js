@@ -17,6 +17,7 @@ import ocrRoutes from './routes/ocr.js'
 import suppliersRoutes from './routes/suppliers.js'
 import billingRoutes from './routes/billing.js'
 import { handleStripeWebhook } from './routes/billing.js'
+import feedbackRoutes from './routes/feedback.js'
 
 const app = express()
 
@@ -88,6 +89,7 @@ app.use('/api/purchase-orders', authMiddleware, purchaseOrdersRoutes)
 app.use('/api/invoices', authMiddleware, invoicesRoutes)
 app.use('/api/ocr', authMiddleware, ocrRoutes)
 app.use('/api/suppliers', authMiddleware, suppliersRoutes)
+app.use('/api/feedback', authMiddleware, feedbackRoutes)
 
 app.use((err, req, res, next) => {
   console.error('GLOBAL ERROR:', err)
