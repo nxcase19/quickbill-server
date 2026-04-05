@@ -28,63 +28,50 @@ function buildPp30ExportFilename(month) {
   return `pp30-${month}-${getTimestamp()}.xlsx`
 }
 
-/** Canonical document date for period filters (alias `d`). */
-const DOC_EFFECTIVE_DATE_SQL = 'COALESCE(d.doc_date, (d.created_at)::date)'
-
-/**
- * Sales receipt scope: RC only, not cancelled (order + payment status). Append after `WHERE` + tenant.
- * @returns {string} SQL fragment starting with `AND ...`
- */
-function canonicalSalesReceiptScopeAnd() {
-  return `AND d.doc_type = 'RC'
-      AND COALESCE(d.sales_order_status, 'active') <> 'cancelled'
-      AND LOWER(COALESCE(d.status, '')) <> 'cancelled'`
-}
-
-/**
- * Period filter on `DOC_EFFECTIVE_DATE_SQL` only (SQL). Mutates `params` when `from`/`to` are used.
- * @param {Record<string, string | undefined>} query
- * @param {unknown[]} params
- */
-function periodFilterAnd(query, params) {
-  const { from, to, period } = query
-  const ddt = DOC_EFFECTIVE_DATE_SQL
-  if (period === 'day') {
-    return ` AND ${ddt} = CURRENT_DATE`
-  }
-  if (period === 'month') {
-    return ` AND EXTRACT(MONTH FROM ${ddt})::int = EXTRACT(MONTH FROM CURRENT_DATE)::int
-      AND EXTRACT(YEAR FROM ${ddt})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
-  }
-  if (period === 'year') {
-    return ` AND EXTRACT(YEAR FROM ${ddt})::int = EXTRACT(YEAR FROM CURRENT_DATE)::int`
-  }
-  if (from && to) {
-    params.push(from, to)
-    const a = params.length - 1
-    const b = params.length
-    return ` AND ${ddt} BETWEEN $${a}::date AND $${b}::date`
-  }
-  return ''
-}
-
 function round2(num) {
   return Math.round(Number(num) * 100) / 100
 }
 
-/** Period on `d.doc_date` for GET /summary only (DATE_TRUNC per product spec). */
-function summaryRcDocDatePeriodAnd(query) {
-  const { period } = query
+function toYmdLocal(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/**
+ * Inclusive date range for reports. Always returns from/to (defaults to current month if no query).
+ * @param {Record<string, string | undefined>} query
+ */
+function resolveReportDateRange(query) {
+  const { from, to, period } = query
+  if (from && to) {
+    return {
+      from: String(from).slice(0, 10),
+      to: String(to).slice(0, 10),
+    }
+  }
+  const now = new Date()
   if (period === 'day') {
-    return ` AND DATE_TRUNC('day', d.doc_date) = DATE_TRUNC('day', NOW())`
+    const s = toYmdLocal(now)
+    return { from: s, to: s }
   }
   if (period === 'month') {
-    return ` AND DATE_TRUNC('month', d.doc_date) = DATE_TRUNC('month', NOW())`
+    const y = now.getFullYear()
+    const mo = now.getMonth()
+    const start = new Date(y, mo, 1)
+    const end = new Date(y, mo + 1, 0)
+    return { from: toYmdLocal(start), to: toYmdLocal(end) }
   }
   if (period === 'year') {
-    return ` AND DATE_TRUNC('year', d.doc_date) = DATE_TRUNC('year', NOW())`
+    const y = now.getFullYear()
+    return { from: `${y}-01-01`, to: `${y}-12-31` }
   }
-  return ''
+  const y = now.getFullYear()
+  const mo = now.getMonth()
+  const start = new Date(y, mo, 1)
+  const end = new Date(y, mo + 1, 0)
+  return { from: toYmdLocal(start), to: toYmdLocal(end) }
 }
 
 const router = Router()
@@ -96,8 +83,8 @@ router.get('/summary', async (req, res) => {
     logTenantAccess('GET /api/reports/summary', req)
 
     const tw = buildTenantWhereClause(req, 'd', 1)
-    const params = [tw.param]
-    const periodAnd = summaryRcDocDatePeriodAnd(req.query)
+    const { from: rangeFrom, to: rangeTo } = resolveReportDateRange(req.query)
+    const params = [tw.param, rangeFrom, rangeTo]
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.set('Pragma', 'no-cache')
@@ -127,7 +114,7 @@ router.get('/summary', async (req, res) => {
         FROM documents d
         WHERE ${tw.clause}
           AND d.doc_type = 'RC'
-        ${periodAnd}`,
+          AND d.doc_date BETWEEN $2::date AND $3::date`,
         params,
       )
     } catch (dbErr) {
@@ -146,6 +133,8 @@ router.get('/summary', async (req, res) => {
 
     console.log('[reports/summary]', {
       period: req.query.period ?? null,
+      from: rangeFrom,
+      to: rangeTo,
       account_id: getAccountId(req),
       total_amount,
       paid_amount,
@@ -175,11 +164,11 @@ router.get('/vat-summary', async (req, res) => {
     requireAccountId(req)
 
     const twDoc = buildTenantWhereClause(req, 'd', 1)
-    const salesParams = [twDoc.param]
-    const salesPeriodAnd = periodFilterAnd(req.query, salesParams)
-    const scopeAnd = canonicalSalesReceiptScopeAnd()
+    const twPur = buildTenantWhereClause(req, 'p', 1)
+    const { from: rangeFrom, to: rangeTo } = resolveReportDateRange(req.query)
+    const salesParams = [twDoc.param, rangeFrom, rangeTo]
+    const purchaseParams = [twPur.param, rangeFrom, rangeTo]
 
-    const twPur = buildTenantWhereClause(req, '', 1)
     const [{ rows: salesRows }, { rows: purchaseRows }] = await Promise.all([
       safeQuery(
         pool,
@@ -189,8 +178,7 @@ router.get('/vat-summary', async (req, res) => {
               SUM(
                 CASE
                   WHEN COALESCE(d.vat_enabled, false) = true
-                    AND COALESCE(d.vat_rate, 0)::numeric = 0.07::numeric
-                  THEN COALESCE(d.vat_amount, 0)
+                  THEN COALESCE(d.subtotal, 0) * COALESCE(d.vat_rate, 0)
                   ELSE 0
                 END
               ),
@@ -200,19 +188,20 @@ router.get('/vat-summary', async (req, res) => {
           ) AS vat_sales
         FROM documents d
         WHERE ${twDoc.clause}
-        ${scopeAnd}
-        ${salesPeriodAnd}`,
+          AND d.doc_type = 'RC'
+          AND d.doc_date BETWEEN $2::date AND $3::date`,
         salesParams,
       ),
       safeQuery(
         pool,
         `SELECT
-          ROUND(COALESCE(SUM(COALESCE(vat_amount, 0)), 0)::numeric, 2) AS vat_purchase
-        FROM purchase_invoices
+          ROUND(COALESCE(SUM(COALESCE(p.vat_amount, 0)), 0)::numeric, 2) AS vat_purchase
+        FROM purchase_invoices p
         WHERE ${twPur.clause}
-          AND (COALESCE(status, 'active') = 'active')
-          AND (COALESCE(document_status, 'issued') = 'issued')`,
-        [twPur.param],
+          AND p.doc_date BETWEEN $2::date AND $3::date
+          AND (COALESCE(p.status, 'active') = 'active')
+          AND (COALESCE(p.document_status, 'issued') = 'issued')`,
+        purchaseParams,
       ),
     ])
 
@@ -222,8 +211,8 @@ router.get('/vat-summary', async (req, res) => {
 
     console.log('[reports/vat-summary]', {
       period: req.query.period ?? null,
-      from: req.query.from ?? null,
-      to: req.query.to ?? null,
+      from: rangeFrom,
+      to: rangeTo,
       account_id: getAccountId(req),
       vat_sales,
       vat_purchase,
