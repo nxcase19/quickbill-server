@@ -13,6 +13,25 @@ router.use(assertCanUseTaxPurchase)
 
 const PO_CANCEL_BLOCKED_EN = 'Cannot cancel invoice generated from PO'
 
+/**
+ * Whitelist of purchase_invoices columns allowed on INSERT (POST create).
+ * IMPORTANT:
+ * This list must match the DB schema for this deployment.
+ * Do NOT add frontend-only fields (e.g. image_url) here without a migration.
+ * If the table schema changes, update this array first, then deploy.
+ */
+const PURCHASE_ALLOWED_COLUMNS = [
+  'supplier_name',
+  'tax_id',
+  'doc_no',
+  'doc_date',
+  'subtotal',
+  'vat_amount',
+  'total',
+  'note',
+  'status',
+]
+
 function purchaseInvoiceIsFromPo(row) {
   if (!row) return false
   if (String(row.source_type || '').toLowerCase() === 'po') return true
@@ -25,6 +44,93 @@ function unlinkPurchaseImage(imageUrl) {
   if (!rel.startsWith('uploads/purchases/')) return
   const abs = path.join(process.cwd(), rel)
   fs.unlink(abs, () => {})
+}
+
+function isPgUndefinedColumn(err) {
+  return Boolean(err && String(err.code) === '42703')
+}
+
+/**
+ * IMPORTANT:
+ * This INSERT path is schema-safe.
+ * Only fields listed in PURCHASE_ALLOWED_COLUMNS are taken from the request body.
+ * Do NOT pass req.body (or spread body) directly into SQL.
+ * Unknown / future JSON fields are ignored and cannot cause 42703 from extra columns.
+ */
+function buildPurchaseInvoiceInsertRow(accountId, body) {
+  const b = body && typeof body === 'object' ? body : {}
+  const data = {}
+
+  for (const key of PURCHASE_ALLOWED_COLUMNS) {
+    if (b[key] !== undefined) {
+      data[key] = b[key]
+    }
+  }
+
+  if (data.doc_no === undefined && b.document_no !== undefined) {
+    data.doc_no = b.document_no
+  }
+
+  if (data.doc_no != null && String(data.doc_no).trim() === '') {
+    data.doc_no = null
+  } else if (data.doc_no != null && typeof data.doc_no === 'string') {
+    data.doc_no = String(data.doc_no).trim()
+  }
+
+  // IMPORTANT:
+  // Normalize numeric and string inputs to prevent invalid data (NaN, string numbers)
+  // Do not trust frontend values for financial fields
+  // Total will be auto-corrected from subtotal + vat_amount if inconsistent
+
+  if (data.subtotal !== undefined) {
+    const n = Number(data.subtotal)
+    data.subtotal = Number.isNaN(n) ? 0 : n
+  }
+
+  if (data.vat_amount !== undefined) {
+    const n = Number(data.vat_amount)
+    data.vat_amount = Number.isNaN(n) ? 0 : n
+  }
+
+  if (data.total !== undefined) {
+    const n = Number(data.total)
+    data.total = Number.isNaN(n) ? 0 : n
+  }
+
+  if (data.subtotal != null && data.vat_amount != null) {
+    const expectedTotal = data.subtotal + data.vat_amount
+    if (
+      data.total == null ||
+      Math.abs(Number(data.total) - expectedTotal) > 0.01
+    ) {
+      data.total = expectedTotal
+    }
+  }
+
+  if (data.supplier_name !== undefined) {
+    data.supplier_name = String(data.supplier_name).trim()
+  }
+
+  if (data.tax_id !== undefined) {
+    data.tax_id = String(data.tax_id).trim()
+  }
+
+  if (data.note !== undefined) {
+    data.note = String(data.note).trim()
+  }
+
+  data.account_id = accountId
+  return data
+}
+
+function buildPurchaseInvoiceInsertQuery(data) {
+  const columns = Object.keys(data)
+  const values = Object.values(data)
+  const placeholders = columns.map((_, i) => `$${i + 1}`)
+  const sql = `INSERT INTO purchase_invoices (${columns.join(', ')})
+      VALUES (${placeholders.join(', ')})
+      RETURNING *`
+  return { sql, params: values }
 }
 
 function handlePurchaseImageUpload(req, res, next) {
@@ -79,44 +185,19 @@ router.post('/', async (req, res) => {
 
     logTenantAccess('POST /api/purchases', req)
 
-    const {
-      supplier_name,
-      tax_id,
-      doc_no,
-      doc_date,
-      subtotal,
-      vat_amount,
-      total,
-      note,
-      image_url,
-    } = req.body
+    const row = buildPurchaseInvoiceInsertRow(accountId, req.body)
+    const { sql, params } = buildPurchaseInvoiceInsertQuery(row)
 
-    const { rows } = await safeQuery(
-      pool,
-      `INSERT INTO purchase_invoices
-      (account_id, supplier_name, tax_id, doc_no, doc_date, subtotal, vat_amount, total, note, image_url)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-      RETURNING *`,
-      [
-        accountId,
-        supplier_name,
-        tax_id,
-        doc_no,
-        doc_date,
-        subtotal,
-        vat_amount,
-        total,
-        note,
-        image_url != null && String(image_url).trim() !== ''
-          ? String(image_url).trim()
-          : null,
-      ],
-    )
+    const { rows } = await safeQuery(pool, sql, params)
 
     res.json(rows[0])
   } catch (err) {
-    console.error('CREATE purchase error:', err)
-    res.status(500).json({ error: err.message })
+    if (isPgUndefinedColumn(err)) {
+      console.error('[purchases/create] schema mismatch:', String(err.message).slice(0, 200))
+    } else {
+      console.error('[purchases/create]', String(err?.message || err).slice(0, 200))
+    }
+    res.status(500).json({ error: 'Failed to create purchase invoice' })
   }
 })
 
@@ -134,12 +215,24 @@ router.post('/:id/image', handlePurchaseImageUpload, async (req, res) => {
     logTenantAccess('POST /api/purchases/:id/image', req, { id })
 
     const tw = buildTenantWhereClause(req, '', 2)
-    const { rows: existing } = await safeQuery(
-      pool,
-      `SELECT image_url FROM purchase_invoices WHERE id = $1 AND ${tw.clause}
+    let existing
+    try {
+      const r = await safeQuery(
+        pool,
+        `SELECT id, image_url FROM purchase_invoices WHERE id = $1 AND ${tw.clause}
          AND (COALESCE(status, 'active') = 'active')`,
-      [id, tw.param],
-    )
+        [id, tw.param],
+      )
+      existing = r.rows
+    } catch (selErr) {
+      if (isPgUndefinedColumn(selErr)) {
+        unlinkPurchaseImage(`/uploads/purchases/${req.file.filename}`)
+        return res.status(503).json({
+          error: 'Invoice images are not supported in this environment',
+        })
+      }
+      throw selErr
+    }
 
     if (existing.length === 0) {
       unlinkPurchaseImage(`/uploads/purchases/${req.file.filename}`)
@@ -163,8 +256,15 @@ router.post('/:id/image', handlePurchaseImageUpload, async (req, res) => {
 
     res.json(rows[0])
   } catch (err) {
-    console.error('POST purchase image error:', err)
-    res.status(500).json({ error: err.message })
+    if (req.file?.filename) {
+      unlinkPurchaseImage(`/uploads/purchases/${req.file.filename}`)
+    }
+    if (isPgUndefinedColumn(err)) {
+      console.error('[purchases/image] schema mismatch:', String(err.message).slice(0, 200))
+    } else {
+      console.error('[purchases/image]', String(err?.message || err).slice(0, 200))
+    }
+    res.status(500).json({ error: 'Failed to save invoice image' })
   }
 })
 
@@ -243,18 +343,24 @@ router.put('/:id', async (req, res) => {
       supplier_name,
       tax_id,
       doc_no,
+      document_no,
       doc_date,
       subtotal,
       vat_amount,
       total,
       note,
-      image_url,
     } = req.body
+
+    const docNoRaw = doc_no != null ? doc_no : document_no
+    const docNoNorm =
+      docNoRaw != null && String(docNoRaw).trim() !== ''
+        ? String(docNoRaw).trim()
+        : ''
 
     const baseParams = [
       supplier_name,
       tax_id ?? '',
-      doc_no ?? '',
+      docNoNorm,
       doc_date ?? null,
       subtotal ?? 0,
       vat_amount ?? 0,
@@ -262,7 +368,9 @@ router.put('/:id', async (req, res) => {
       note ?? '',
     ]
 
-    let sql = `
+    // Do not SET image_url here; some deployments have no image_url column on purchase_invoices.
+    const tw = buildTenantWhereClause(req, '', 10)
+    const sql = `
       UPDATE purchase_invoices
       SET
         supplier_name = $1,
@@ -272,29 +380,13 @@ router.put('/:id', async (req, res) => {
         subtotal = $5,
         vat_amount = $6,
         total = $7,
-        note = $8`
-
-    const params = [...baseParams]
-
-    if (image_url !== undefined) {
-      const img =
-        image_url != null && String(image_url).trim() !== ''
-          ? String(image_url).trim()
-          : null
-      sql += `,\n        image_url = $9`
-      params.push(img)
-    }
-
-    const idParam = params.length + 1
-    const tw = buildTenantWhereClause(req, '', idParam + 1)
-
-    sql += `
-      WHERE id = $${idParam}
+        note = $8
+      WHERE id = $9
         AND ${tw.clause}
         AND (COALESCE(status, 'active') = 'active')
       RETURNING *`
 
-    params.push(id, tw.param)
+    const params = [...baseParams, id, tw.param]
 
     const result = await safeQuery(pool, sql, params)
 
@@ -306,6 +398,10 @@ router.put('/:id', async (req, res) => {
   } catch (err) {
     if (err.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
+    }
+    if (isPgUndefinedColumn(err)) {
+      console.error('[purchases/update] schema mismatch:', String(err.message).slice(0, 200))
+      return res.status(500).json({ error: 'Failed to update purchase invoice' })
     }
     console.error('UPDATE purchase error:', err)
     res.status(500).json({ error: err.message })
