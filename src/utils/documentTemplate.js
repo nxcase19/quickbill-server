@@ -98,11 +98,8 @@ export function renderDocument({ type, data, company, lang }) {
   const companyNameRaw = companySafe?.name_th || ''
   const companyName = escapeHtml(companyNameRaw)
 
-  const rawLogo = companySafe?.logo_url
-  const logoFull =
-    rawLogo != null && String(rawLogo).trim() !== ''
-      ? resolvePdfLogoAbsoluteUrl(String(rawLogo).trim()) || ''
-      : ''
+  /** From company.logo_url only — absolute http(s); Supabase public URL when path is a storage key */
+  const logoUrl = resolvePdfLogoAbsoluteUrl(companySafe?.logo_url) || ''
 
   const signature = companySafe?.signature_url
   const signatureFull =
@@ -478,8 +475,8 @@ ${Array(12)
   <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
     <div style="display:flex; gap:12px; align-items:flex-start;">
       ${
-        logoFull
-          ? `<img src="${escapeAttrUrl(logoFull)}" style="width:60px; height:60px; object-fit:contain;" alt="" />`
+        logoUrl
+          ? `<img src="${escapeAttrUrl(logoUrl)}" style="width:80px;height:auto;object-fit:contain;" alt="" />`
           : ''
       }
       <div style="display:flex; flex-direction:column; line-height:1.4;">

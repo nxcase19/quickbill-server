@@ -65,3 +65,9 @@ coverage
 # Uploads (สำคัญมากสำหรับ SaaS)
 # ======================
 uploads/
+.env*
+
+# ======================
+# DB sync dumps (PII — never commit)
+# ======================
+scripts/db/backups/*.sql

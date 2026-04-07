@@ -69,7 +69,7 @@ paymentsRouter.post('/group', async (req, res) => {
     let updSql = `UPDATE documents d
        SET
          paid_amount = total,
-         status = 'paid',
+         payment_status = 'paid',
          is_locked = TRUE
        WHERE d.order_id = $1 AND ${tw.clause}`
     const updParams = [order_id, tw.param]
@@ -154,7 +154,7 @@ paymentsRouter.post('/', async (req, res) => {
     }
 
     let updSql = `UPDATE documents d
-       SET paid_amount = total, status = 'paid', is_locked = TRUE
+       SET paid_amount = total, payment_status = 'paid', is_locked = TRUE
        WHERE d.order_id = $1 AND ${tw.clause}`
     const updParams = [orderId, tw.param]
     await safeQuery(pool, updSql, updParams)

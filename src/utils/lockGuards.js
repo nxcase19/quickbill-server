@@ -1,6 +1,8 @@
+import { getPaymentStatus } from './documentPaymentMath.js'
+
 export function deriveSalesDocumentLocked(status) {
   const s = String(status ?? '').trim().toLowerCase()
-  return s === 'paid' || s === 'cancelled'
+  return s === 'cancelled'
 }
 
 export function derivePurchaseOrderLocked(status) {
@@ -10,7 +12,9 @@ export function derivePurchaseOrderLocked(status) {
 
 export function isSalesDocumentLocked(doc) {
   if (!doc) return false
-  return doc.is_locked === true || deriveSalesDocumentLocked(doc.status)
+  if (doc.is_locked === true) return true
+  if (getPaymentStatus(doc) === 'paid') return true
+  return deriveSalesDocumentLocked(doc.status)
 }
 
 export function isPurchaseOrderLocked(po) {

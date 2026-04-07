@@ -12,10 +12,12 @@ import {
 import { renderDocument } from '../utils/documentTemplate.js'
 import { getCompany } from '../services/companyService.js'
 import { applyPdfLogoBaseUrl, buildCompanyForPdf } from '../utils/buildCompanyForPdf.js'
+import { inlineCompanyLogoForPdf } from '../utils/pdfInlineImage.js'
 import { assertPoNotCancelled, isPoCancelled } from '../utils/cancelGuards.js'
 import { assertPurchaseOrderNotLocked } from '../utils/lockGuards.js'
 import { assertCanUsePO } from '../middleware/planGuards.js'
 import { getPdfWatermarkText } from '../utils/planService.js'
+import { setContentAndWaitForImages } from '../utils/puppeteerPdfHelpers.js'
 
 const router = Router()
 router.use(assertCanUsePO)
@@ -241,6 +243,8 @@ router.get('/:id/pdf', async (req, res) => {
     const doc = po
     const company = buildCompanyForPdf(doc, fallbackCompany)
     applyPdfLogoBaseUrl(company)
+    await inlineCompanyLogoForPdf(company)
+    console.log('LOGO URL:', company.logo_url ?? null)
     console.log('PDF FINAL COMPANY:', company)
 
     const lineItems = normalizeItems(items)
@@ -317,7 +321,7 @@ ${rawHtml}
     })
     const page = await browser.newPage()
 
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await setContentAndWaitForImages(page, html)
 
     const pdfBuffer = await page.pdf({
       format: 'A4',

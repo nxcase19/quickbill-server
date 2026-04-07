@@ -21,13 +21,35 @@ import feedbackRoutes from './routes/feedback.js'
 
 const app = express()
 
-const allowedOrigins = [
-  'https://quickbill.dev',
-  'https://quickbill-web.vercel.app',
-]
+app.disable('etag')
 
-const corsOptions = {
-  origin: allowedOrigins,
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
+  next()
+})
+
+const corsConfig = {
+  origin(origin, callback) {
+    if (!origin) {
+      return callback(null, true)
+    }
+
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'https://quickbill.dev',
+      'https://quickbill-web.vercel.app',
+    ]
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true)
+    }
+
+    console.error('CORS blocked:', origin)
+    return callback(null, false)
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
@@ -38,8 +60,8 @@ const corsOptions = {
   ],
 }
 
-app.use(cors(corsOptions))
-app.options('*', cors(corsOptions))
+app.use(cors(corsConfig))
+app.options('*', cors(corsConfig))
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Credentials', 'true')

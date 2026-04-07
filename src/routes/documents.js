@@ -12,6 +12,7 @@ import { requireAccountId, safeQuery } from '../utils/tenantQuery.js'
 import { renderDocument } from '../utils/documentTemplate.js'
 import { getCompany } from '../services/companyService.js'
 import { applyPdfLogoBaseUrl } from '../utils/buildCompanyForPdf.js'
+import { inlineCompanyLogoForPdf } from '../utils/pdfInlineImage.js'
 import { assertCanCreateDocument } from '../middleware/planGuards.js'
 import { pdfIsFreePlan } from '../utils/pdfGenerator.js'
 import {
@@ -20,6 +21,8 @@ import {
   incrementDocumentUsage,
 } from '../utils/usageService.js'
 import { allowsProBasicAndTrial, getPlanAccess } from '../utils/planAccess.js'
+import { enrichDocumentRow } from '../utils/documentPaymentMath.js'
+import { setContentAndWaitForImages } from '../utils/puppeteerPdfHelpers.js'
 
 /** Legacy bigint company_id for INSERT only when the column is NOT NULL; never used as tenant filter. */
 function legacyCompanyIdForInsert(req) {
@@ -166,41 +169,34 @@ router.get('/', async (req, res) => {
     logTenantAccess('GET /api/documents', req)
     console.log('TENANT documents', { accountId })
 
-    const { status, q } = req.query
+    /** `?status=` = financial list filter only (paid | outstanding). Uses paid_amount vs total; not legacy workflow status. */
+    const listFilter = req.query.status
+    const { q } = req.query
+    console.log('DOCUMENT LIST FILTER (amount-based):', listFilter)
 
-    const tw = buildTenantWhereClause(req, 'd', 1)
-    let sql = `
-    SELECT
-      d.id,
-      d.doc_no,
-      d.doc_type,
-      d.order_id,
-      d.customer_name,
-      d.total,
-      d.paid_amount,
-      d.status AS payment_status,
-      d.is_locked
-    FROM documents d
-    WHERE ${tw.clause}
-  `
-    const params = [tw.param]
+    let sql = 'SELECT * FROM documents WHERE account_id = $1::uuid'
+    const values = [accountId]
 
-    if (status === 'outstanding') {
-      sql += ` AND d.status IN ('unpaid', 'partial')`
-    } else if (status === 'paid') {
-      sql += ` AND d.status = 'paid'`
+    const notCancelled = `LOWER(COALESCE(status, '')) <> 'cancelled'`
+
+    if (listFilter === 'paid') {
+      sql += ` AND ${notCancelled} AND COALESCE(paid_amount,0) >= COALESCE(total,0)`
+    }
+    if (listFilter === 'outstanding') {
+      sql += ` AND ${notCancelled} AND COALESCE(paid_amount,0) < COALESCE(total,0)`
     }
 
     if (q && String(q).trim() !== '') {
       const like = `%${String(q).trim()}%`
-      sql += ` AND (d.doc_no ILIKE $${params.length + 1} OR d.customer_name ILIKE $${params.length + 2})`
-      params.push(like, like)
+      sql += ` AND (doc_no ILIKE $${values.length + 1} OR customer_name ILIKE $${values.length + 2})`
+      values.push(like, like)
     }
 
-    sql += ` ORDER BY d.id DESC`
+    sql += ' ORDER BY created_at DESC'
 
-    const { rows } = await safeQuery(pool, sql, params)
-    return res.json({ success: true, data: rows })
+    const { rows } = await safeQuery(pool, sql, values)
+    const data = rows.map(enrichDocumentRow)
+    return res.json({ success: true, data })
   } catch (err) {
     console.error('documents GET error:', err?.message, err?.detail, err?.code, err?.stack)
     return res.status(500).json({ success: false, error: err.message })
@@ -375,6 +371,7 @@ router.get('/:id/pdf', authenticateDocumentPdf, async (req, res) => {
     }
 
     applyPdfLogoBaseUrl(finalCompany)
+    await inlineCompanyLogoForPdf(finalCompany)
 
     console.log('PDF COMPANY SOURCE:', {
       plan: company.plan,
@@ -604,7 +601,7 @@ ${rawHtml}
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     })
     const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await setContentAndWaitForImages(page, html)
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -645,7 +642,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Document not found' })
     }
 
-    return res.json({ success: true, data: rows[0] })
+    return res.json({ success: true, data: enrichDocumentRow(rows[0]) })
   } catch (err) {
     console.error('GET document error:', err)
     return res.status(500).json({ success: false, error: err.message })

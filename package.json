@@ -4,14 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "nodemon server.js",
-    "start": "node server.js"
+    "dev": "cross-env NODE_ENV=development nodemon server.js",
+    "staging": "cross-env NODE_ENV=staging node server.js",
+    "start": "cross-env NODE_ENV=production node server.js",
+
+    "db:dump:prod": "cross-env NODE_ENV=production node scripts/db/db-cli.mjs dump",
+    "db:restore:dev": "cross-env NODE_ENV=development node scripts/db/db-cli.mjs restore",
+    "db:normalize:dev": "cross-env NODE_ENV=development node scripts/db/db-cli.mjs normalize",
+
+    "db:dump:staging": "cross-env NODE_ENV=staging node scripts/db/db-cli.mjs dump",
+    "db:restore:staging": "cross-env NODE_ENV=staging node scripts/db/db-cli.mjs restore",
+    "db:normalize:staging": "cross-env NODE_ENV=staging node scripts/db/db-cli.mjs normalize",
+
+    "db:sync:staging": "cross-env TARGET_ENV=staging node scripts/db/sync-from-prod.mjs",
+    "db:sync:dev": "cross-env TARGET_ENV=development node scripts/db/sync-from-prod.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
+    "dotenv-flow": "^4.1.0",
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "google-auth-library": "^10.6.2",
@@ -24,5 +37,9 @@
     "puppeteer": "^24.40.0",
     "stripe": "^21.0.1",
     "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "nodemon": "^3.1.7"
   }
 }

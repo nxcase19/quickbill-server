@@ -13,6 +13,7 @@ import {
   mapReportDateFilterError,
 } from '../utils/reportFilters.js'
 import { roundMoney } from '../utils/reportAggregates.js'
+import { enrichDocumentRow } from '../utils/documentPaymentMath.js'
 
 function isPgInvalidDateInput(err) {
   const m = String(err?.message || '')
@@ -81,13 +82,24 @@ router.get('/summary', async (req, res) => {
       result = await safeQuery(
         pool,
         `SELECT
-          ROUND(COALESCE(SUM(d.total), 0)::numeric, 2) AS total_amount,
           ROUND(
             COALESCE(
               SUM(
                 CASE
-                  WHEN LOWER(COALESCE(d.status, '')) = 'paid' THEN d.total
-                  ELSE 0
+                  WHEN LOWER(COALESCE(d.status, '')) = 'cancelled' THEN 0
+                  ELSE COALESCE(d.total, 0)
+                END
+              ),
+              0
+            )::numeric,
+            2
+          ) AS total_amount,
+          ROUND(
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN LOWER(COALESCE(d.status, '')) = 'cancelled' THEN 0
+                  ELSE COALESCE(d.paid_amount, 0)
                 END
               ),
               0
@@ -98,8 +110,11 @@ router.get('/summary', async (req, res) => {
             COALESCE(
               SUM(
                 CASE
-                  WHEN LOWER(COALESCE(d.status, '')) <> 'paid' THEN d.total
-                  ELSE 0
+                  WHEN LOWER(COALESCE(d.status, '')) = 'cancelled' THEN 0
+                  ELSE GREATEST(
+                    0,
+                    COALESCE(d.total, 0) - COALESCE(d.paid_amount, 0)
+                  )
                 END
               ),
               0
@@ -332,10 +347,11 @@ router.get('/export', assertCanExport, async (req, res) => {
     `
     sql += df.sql
 
+    const docNotCancelled = `LOWER(COALESCE(d.status, '')) <> 'cancelled'`
     if (status === 'paid') {
-      sql += ` AND d.status = 'paid'`
+      sql += ` AND ${docNotCancelled} AND COALESCE(d.paid_amount,0) >= COALESCE(d.total,0)`
     } else if (status === 'unpaid') {
-      sql += ` AND d.status != 'paid'`
+      sql += ` AND ${docNotCancelled} AND COALESCE(d.paid_amount,0) < COALESCE(d.total,0)`
     }
 
     if (doc_type) {
@@ -470,7 +486,7 @@ router.get('/tax-receipts', async (req, res) => {
       doc_date,
       total,
       paid_amount,
-      status AS payment_status
+      status
     FROM documents
     WHERE ${tw.clause}
       AND doc_type = 'RC'
@@ -478,7 +494,7 @@ router.get('/tax-receipts', async (req, res) => {
     ORDER BY id DESC`,
       [tw.param],
     )
-    res.json(rows)
+    res.json(rows.map(enrichDocumentRow))
   } catch (err) {
     if (err.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })

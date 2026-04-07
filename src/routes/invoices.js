@@ -11,10 +11,23 @@ import {
 } from '../utils/tenantQuery.js'
 import { renderDocument } from '../utils/documentTemplate.js'
 import { getPdfWatermarkText } from '../utils/planService.js'
+import { setContentAndWaitForImages } from '../utils/puppeteerPdfHelpers.js'
 import { getCompany } from '../services/companyService.js'
 import { applyPdfLogoBaseUrl, buildCompanyForPdf } from '../utils/buildCompanyForPdf.js'
+import { inlineCompanyLogoForPdf } from '../utils/pdfInlineImage.js'
+import { calculateWHT } from '../utils/whtCalculator.js'
+import { syncPaymentStatusByInvoice } from '../services/paymentSyncService.js'
 
 const router = Router()
+
+const WHT_TYPES = new Set(['SERVICE', 'RENT', 'OTHER'])
+
+async function deleteWithholdingForInvoice(client, invoiceId) {
+  await client.query(
+    `DELETE FROM withholding_taxes WHERE invoice_id = $1::uuid`,
+    [invoiceId],
+  )
+}
 const LOCKED_ERROR = 'Document is locked and cannot be modified'
 
 const UUID_RE =
@@ -149,6 +162,7 @@ router.get('/:id/pdf', async (req, res) => {
     const doc = inv
     const company = buildCompanyForPdf(doc, fallbackCompany)
     applyPdfLogoBaseUrl(company)
+    await inlineCompanyLogoForPdf(company)
     console.log('PDF FINAL COMPANY:', company)
 
     const effectiveLang = pdfLangOverride ?? 'th'
@@ -183,7 +197,7 @@ router.get('/:id/pdf', async (req, res) => {
     })
     const page = await browser.newPage()
 
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await setContentAndWaitForImages(page, html)
 
     const pdfBuffer = await page.pdf({
       format: 'A4',
@@ -228,7 +242,17 @@ router.get('/:id', async (req, res) => {
       [id],
     )
 
-    res.json({ ...inv, items })
+    const { rows: whtRows } = await safeQuery(
+      pool,
+      `SELECT id, type, rate, base_amount, wht_amount, certificate_no, issued_date, created_at, updated_at
+       FROM withholding_taxes
+       WHERE invoice_id = $1::uuid
+       LIMIT 1`,
+      [id],
+      { skipAssert: true },
+    )
+
+    res.json({ ...inv, items, wht: whtRows[0] ?? null })
   } catch (err) {
     if (err.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
@@ -298,6 +322,42 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'total is required' })
     }
 
+    const whtRaw = req.body?.wht
+    let whtAmountVal = 0
+    let netAmountVal = computedTotal
+    let whtInsertPayload = null
+
+    if (whtRaw && whtRaw.enabled === true) {
+      if (computedSubtotal <= 0) {
+        return res.status(400).json({
+          message: 'subtotal must be greater than 0 for WHT',
+        })
+      }
+      const whtType = String(whtRaw.type || 'SERVICE').trim().toUpperCase()
+      if (!WHT_TYPES.has(whtType)) {
+        return res.status(400).json({ message: 'invalid WHT type' })
+      }
+      const whtRate = Number(whtRaw.rate)
+      if (!(whtRate > 0) || Number.isNaN(whtRate)) {
+        return res.status(400).json({
+          message: 'WHT rate must be greater than 0',
+        })
+      }
+      const calc = calculateWHT({
+        subtotal: computedSubtotal,
+        vatAmount: computedVatAmount,
+        rate: whtRate,
+      })
+      whtAmountVal = calc.whtAmount
+      netAmountVal = calc.netAmount
+      whtInsertPayload = {
+        type: whtType,
+        rate: round2(whtRate),
+        base_amount: calc.baseAmount,
+        wht_amount: calc.whtAmount,
+      }
+    }
+
     const { rows: nowRows } = await client.query(
       `SELECT TO_CHAR(NOW(), 'YYYYMM') as yyyymm`,
     )
@@ -339,8 +399,9 @@ router.post('/', async (req, res) => {
         const { rows: invRows } = await client.query(
           `INSERT INTO invoices (
             account_id, customer_id, customer_name, customer_address, customer_phone, customer_tax_id, tax_id, doc_no, doc_date,
-            subtotal, vat_amount, total, vat_type, note
-          ) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+            subtotal, vat_amount, total, vat_type, note,
+            wht_amount, net_amount
+          ) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
           RETURNING *`,
           [
             accountId,
@@ -357,6 +418,8 @@ router.post('/', async (req, res) => {
             computedTotal,
             normalizedVatType,
             note != null ? String(note) : '',
+            whtAmountVal,
+            netAmountVal,
           ],
         )
 
@@ -368,6 +431,22 @@ router.post('/', async (req, res) => {
               invoice_id, description, quantity, unit_price, amount
             ) VALUES ($1::uuid,$2,$3,$4,$5)`,
             [inv.id, it.description, it.quantity, it.unit_price, it.amount],
+          )
+        }
+
+        if (whtInsertPayload) {
+          await client.query(
+            `INSERT INTO withholding_taxes (
+              account_id, invoice_id, type, rate, base_amount, wht_amount
+            ) VALUES ($1::uuid, $2::uuid, $3::text, $4::numeric, $5::numeric, $6::numeric)`,
+            [
+              accountId,
+              inv.id,
+              whtInsertPayload.type,
+              whtInsertPayload.rate,
+              whtInsertPayload.base_amount,
+              whtInsertPayload.wht_amount,
+            ],
           )
         }
 
@@ -410,7 +489,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const client = await pool.connect()
   try {
-    requireAccountId(req)
+    const accountId = requireAccountId(req)
     const id = req.params.id
     if (!isUuid(id)) {
       return res.status(400).json({ error: 'Invalid id' })
@@ -467,9 +546,47 @@ router.put('/:id', async (req, res) => {
         : 0
     const computedTotal = round2(computedSubtotal + computedVatAmount)
 
-    const tw = buildTenantWhereClause(req, '', 10)
+    const whtRaw = req.body?.wht
+    let whtAmountVal = 0
+    let netAmountVal = computedTotal
+    let whtInsertPayload = null
+
+    if (whtRaw && whtRaw.enabled === true) {
+      if (computedSubtotal <= 0) {
+        return res.status(400).json({
+          error: 'subtotal must be greater than 0 for WHT',
+        })
+      }
+      const whtType = String(whtRaw.type || 'SERVICE').trim().toUpperCase()
+      if (!WHT_TYPES.has(whtType)) {
+        return res.status(400).json({ error: 'invalid WHT type' })
+      }
+      const whtRate = Number(whtRaw.rate)
+      if (!(whtRate > 0) || Number.isNaN(whtRate)) {
+        return res.status(400).json({
+          error: 'WHT rate must be greater than 0',
+        })
+      }
+      const calc = calculateWHT({
+        subtotal: computedSubtotal,
+        vatAmount: computedVatAmount,
+        rate: whtRate,
+      })
+      whtAmountVal = calc.whtAmount
+      netAmountVal = calc.netAmount
+      whtInsertPayload = {
+        type: whtType,
+        rate: round2(whtRate),
+        base_amount: calc.baseAmount,
+        wht_amount: calc.whtAmount,
+      }
+    }
+
+    const tw = buildTenantWhereClause(req, '', 16)
 
     await client.query('BEGIN')
+
+    await deleteWithholdingForInvoice(client, id)
 
     const { rows } = await client.query(
       `UPDATE invoices SET
@@ -485,8 +602,10 @@ router.put('/:id', async (req, res) => {
         total = $10,
         vat_type = $11,
         note = $12,
+        wht_amount = $13,
+        net_amount = $14,
         updated_at = NOW()
-      WHERE id = $13::uuid AND ${tw.clause}
+      WHERE id = $15::uuid AND ${tw.clause}
       RETURNING *`,
       [
         customer_id || null,
@@ -501,6 +620,8 @@ router.put('/:id', async (req, res) => {
         computedTotal,
         normalizedVatType,
         note != null ? String(note) : '',
+        whtAmountVal,
+        netAmountVal,
         id,
         tw.param,
       ],
@@ -519,6 +640,22 @@ router.put('/:id', async (req, res) => {
           invoice_id, description, quantity, unit_price, amount
         ) VALUES ($1::uuid,$2,$3,$4,$5)`,
         [id, it.description, it.quantity, it.unit_price, it.amount],
+      )
+    }
+
+    if (whtInsertPayload) {
+      await client.query(
+        `INSERT INTO withholding_taxes (
+          account_id, invoice_id, type, rate, base_amount, wht_amount
+        ) VALUES ($1::uuid, $2::uuid, $3::text, $4::numeric, $5::numeric, $6::numeric)`,
+        [
+          accountId,
+          id,
+          whtInsertPayload.type,
+          whtInsertPayload.rate,
+          whtInsertPayload.base_amount,
+          whtInsertPayload.wht_amount,
+        ],
       )
     }
 
@@ -610,6 +747,7 @@ router.post('/:id/pay', async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Not found' })
     }
+    await syncPaymentStatusByInvoice(pool, id)
     res.json(rows[0])
   } catch (err) {
     if (err.message === 'Missing account_id') {
@@ -621,6 +759,7 @@ router.post('/:id/pay', async (req, res) => {
 })
 
 router.delete('/:id', async (req, res) => {
+  const client = await pool.connect()
   try {
     requireAccountId(req)
     const id = req.params.id
@@ -639,8 +778,9 @@ router.delete('/:id', async (req, res) => {
     }
 
     const tw = buildTenantWhereClause(req, '', 2)
-    const { rows } = await safeQuery(
-      pool,
+    await client.query('BEGIN')
+    await deleteWithholdingForInvoice(client, id)
+    const { rows } = await client.query(
       `UPDATE invoices
        SET status = 'cancelled', updated_at = NOW()
        WHERE id = $1::uuid AND ${tw.clause}
@@ -649,19 +789,29 @@ router.delete('/:id', async (req, res) => {
     )
 
     if (rows.length === 0) {
+      await client.query('ROLLBACK')
       return res.status(404).json({ error: 'Not found' })
     }
+    await client.query('COMMIT')
     res.json({ success: true, status: rows[0].status })
   } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      /* ignore */
+    }
     if (err.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
     }
     console.error('DELETE /invoices/:id error:', err)
     res.status(500).json({ error: err.message })
+  } finally {
+    client.release()
   }
 })
 
 router.patch('/:id/cancel', async (req, res) => {
+  const client = await pool.connect()
   try {
     requireAccountId(req)
     const id = req.params.id
@@ -681,8 +831,9 @@ router.patch('/:id/cancel', async (req, res) => {
     }
 
     const tw = buildTenantWhereClause(req, '', 2)
-    const { rows } = await safeQuery(
-      pool,
+    await client.query('BEGIN')
+    await deleteWithholdingForInvoice(client, id)
+    const { rows } = await client.query(
       `UPDATE invoices
        SET status = 'cancelled', updated_at = NOW()
        WHERE id = $1::uuid AND ${tw.clause}
@@ -690,15 +841,24 @@ router.patch('/:id/cancel', async (req, res) => {
       [id, tw.param],
     )
     if (!rows.length) {
+      await client.query('ROLLBACK')
       return res.status(404).json({ error: 'Not found' })
     }
+    await client.query('COMMIT')
     res.json(rows[0])
   } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      /* ignore */
+    }
     if (err.message === 'Missing account_id') {
       return res.status(401).json({ error: 'Missing account_id' })
     }
     console.error('PATCH /invoices/:id/cancel error:', err)
     res.status(500).json({ error: err.message })
+  } finally {
+    client.release()
   }
 })
 

@@ -1,4 +1,4 @@
-import { toAbsoluteUrl } from './url.js'
+import { resolvePdfLogoAbsoluteUrl } from './pdfLogoUrl.js'
 
 /** @param {unknown} v */
 function trimLogoOrNull(v) {
@@ -14,16 +14,12 @@ function trimLogoOrNull(v) {
  */
 export function applyPdfLogoBaseUrl(company) {
   if (!company) return
-  if (!company.logo_url || String(company.logo_url).trim() === '') {
-    company.logo_url = null
-  } else if (!String(company.logo_url).startsWith('http')) {
-    company.logo_url = toAbsoluteUrl(String(company.logo_url).trim())
-  }
-  if (company.signature_url != null && String(company.signature_url).trim() !== '') {
-    const sig = String(company.signature_url).trim()
-    if (!sig.startsWith('http')) {
-      company.signature_url = toAbsoluteUrl(sig)
-    }
+  company.logo_url = resolvePdfLogoAbsoluteUrl(company.logo_url)
+  const sigRaw = company.signature_url
+  if (sigRaw != null && String(sigRaw).trim() !== '') {
+    company.signature_url = resolvePdfLogoAbsoluteUrl(String(sigRaw).trim())
+  } else {
+    company.signature_url = null
   }
 }
 
@@ -53,6 +49,9 @@ export function buildCompanyForPdf(doc, fallbackCompany) {
   if (doc?.company_name != null && String(doc.company_name).trim() !== '') {
     console.log('USING SNAPSHOT')
 
+    const snapshotLogo = trimLogoOrNull(doc.company_logo_url)
+    const fallbackLogo = trimLogoOrNull(fallbackCompany?.logo_url)
+
     return {
       name_th: String(doc.company_name).trim(),
       address: doc.company_address != null ? String(doc.company_address) : '-',
@@ -64,7 +63,8 @@ export function buildCompanyForPdf(doc, fallbackCompany) {
         doc.company_tax_id != null && String(doc.company_tax_id).trim() !== ''
           ? String(doc.company_tax_id).trim()
           : '',
-      logo_url: trimLogoOrNull(doc.company_logo_url),
+      // PO / sales docs: snapshot may omit company_logo_url (legacy rows); use live company logo like RC/INV
+      logo_url: snapshotLogo ?? fallbackLogo,
       signature_url:
         trimLogoOrNull(doc.company_signature_url) ??
         fallbackCompany?.signature_url ??
